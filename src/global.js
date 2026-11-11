@@ -82,7 +82,7 @@ players.onMessage("resume-failed", () => send("notice", { message: "IINA could n
 setInterval(() => sync.retryClosed(), 10000);
 function disableSync() { resetQueue(); livePlayers.clear();publishPlayers(); opening.clear(); sync.clear(); players.postMessage(null, "disable-sync", {}); }
 function headers(accessToken) {
-  const h = { Accept: "application/json", "X-Plex-Product": "IINA Plex Library", "X-Plex-Version": "0.7.2", "X-Plex-Client-Identifier": clientID };
+  const h = { Accept: "application/json", "X-Plex-Product": "IINA Plex Library", "X-Plex-Version": "0.7.5", "X-Plex-Client-Identifier": clientID };
   if (accessToken) h["X-Plex-Token"] = accessToken;
   return h;
 }

@@ -1,7 +1,7 @@
 {
   "name": "Plex Library",
   "identifier": "io.iina.plex-library",
-  "version": "0.7.2",
+  "version": "0.7.5",
   "author": {
     "name": "iina-plex contributors"
   },

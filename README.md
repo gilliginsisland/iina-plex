@@ -15,6 +15,10 @@ for the selected version; server-side transcoding is not supported.
 
 ## Installation
 
+**Alpha:** [v0.7.5](https://github.com/gilliginsisland/iina-plex/releases/tag/v0.7.5)
+is available as a pre-release. Download its `.iinaplgz` asset to try the alpha;
+it is not offered as a stable update.
+
 In IINA's plugin manager, install the plugin from this GitHub repository:
 
 ```text
