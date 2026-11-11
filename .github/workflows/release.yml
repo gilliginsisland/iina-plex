@@ -14,4 +14,3 @@ jobs:
     with:
       folder: .
       asset-name: Plex.iinaplugin-${{ github.ref_name }}.iinaplgz
-      prerelease: true
