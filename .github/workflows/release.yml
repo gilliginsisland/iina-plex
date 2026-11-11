@@ -1,0 +1,16 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: gilliginsisland/workflows/.github/workflows/zip-release.yml@main
+    with:
+      folder: .
+      asset-name: Plex.iinaplugin-${{ github.ref_name }}.iinaplgz

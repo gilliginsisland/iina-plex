@@ -1,0 +1,19 @@
+{
+  "name": "Plex Library",
+  "identifier": "io.iina.plex-library",
+  "version": "0.7.2",
+  "author": {
+    "name": "iina-plex contributors"
+  },
+  "description": "Browse Plex movies and TV shows and play them in IINA.",
+  "entry": "src/main.js",
+  "globalEntry": "src/global.js",
+  "permissions": [
+    "network-request"
+  ],
+  "allowedDomains": [
+    "*"
+  ],
+  "ghRepo": "gilliginsisland/iina-plex",
+  "ghVersion": 1
+}
