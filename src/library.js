@@ -1,6 +1,5 @@
 const P = require("./plex.js");
 const Media = require("./media.js");
-
 // Owns server selection, library requests and authenticated artwork caching.
 class PlexLibrary {
   constructor(app) {
@@ -20,6 +19,7 @@ class PlexLibrary {
     this.app.guarded("connect", (data) => this.connect(data));
     this.app.guarded("reconnect", (data) => this.reconnect(data));
     this.app.guarded("browse", (data) => this.browse(data));
+    this.app.guarded("home-section", (data) => this.loadHomeSection(data));
     this.app.guarded("filters", (data) => this.loadFilters(data));
     this.app.guarded("watched", (data) => this.markWatched(data));
     this.app.guarded("details", (data) => this.loadDetails(data));
@@ -33,26 +33,13 @@ class PlexLibrary {
     this.artworkCache.clear();
   }
 
-  rememberArtwork(items) {
-    this.artwork = {};
+  rememberArtwork(items, append = false) {
+    if (!append) this.artwork = {};
     for (const item of items) {
-      const thumb = item.thumb || item.composite || item.parentThumb || item.grandparentThumb;
       try {
-        if (thumb && /^\/(?:library\/(?:metadata|collections)|playlists)\//.test(thumb))
-          this.artwork[P.id(item.ratingKey)] = { path: P.path(thumb), wide: item.type === "episode" };
+        if (item.artworkPath) this.artwork[item.id] = item;
       } catch (_) {}
     }
-  }
-
-  async metadataAt(connection, id) {
-    const result = await this.app.request(
-      connection.base + "/library/metadata/" + P.id(id) + "?includeMarkers=1",
-      connection.token
-    );
-    const item = (result.MediaContainer.Metadata || [])[0];
-    if (!item || P.id(item.ratingKey) !== P.id(id))
-      throw new Error("Plex returned a different item. Refresh and try again.");
-    return item;
   }
 
   async discover() {
@@ -63,7 +50,7 @@ class PlexLibrary {
     let result;
     try {
       await this.app.account.identify();
-      result = await this.app.account.resourcesFor(this.app.account.accessToken);
+      result = await this.app.account.profileAPI.resources();
     } catch (error) {
       if (currentSession !== this.app.account.revision || generation !== this.discoveryGeneration) return;
       if (error.denied) {
@@ -73,35 +60,27 @@ class PlexLibrary {
       throw error;
     }
     if (currentSession !== this.app.account.revision || generation !== this.discoveryGeneration) return;
-    this.servers = result.filter(
-      (s) => (s.provides || "").split(",").indexOf("server") !== -1 && s.accessToken
-    );
+    this.servers = result;
     this.app.send(
       "servers",
-      this.servers.map((s) => ({ id: s.clientIdentifier, name: s.name, owned: P.flag(s.owned) }))
+      this.servers.map((server) => server.snapshot)
     );
   }
 
   async connect(data) {
-    const server = this.servers.find((s) => s.clientIdentifier === data.id);
+    const server = this.servers.find((s) => s.id === data.id);
     if (!server) throw new Error("Choose a discovered server.");
     const currentSession = this.app.account.revision,
       generation = ++this.connectionGeneration;
     this.selected = null;
     this.artwork = {};
     this.artworkCache.clear();
-    for (const c of P.connections(server, data.allowHTTP === true)) {
+    for (const c of server.connections(data.allowHTTP === true)) {
       try {
-        const base = P.origin(c.uri);
-        const result = await this.app.request(base + "/library/sections", server.accessToken);
+        const api = server.connection(c.uri, this.app.account.scope, data.allowHTTP === true);
+        const result = await api.request("/library/sections");
         if (currentSession !== this.app.account.revision || generation !== this.connectionGeneration) return;
-        this.selected = {
-          base,
-          token: server.accessToken,
-          serverID: server.clientIdentifier,
-          scope: this.app.account.scope,
-          allowHTTP: data.allowHTTP === true
-        };
+        this.selected = api;
         this.app.api.preferences.set("lastServer", data.id);
         this.app.api.preferences.set("allowHTTP", data.allowHTTP === true);
         this.app.api.preferences.sync();
@@ -138,21 +117,21 @@ class PlexLibrary {
       this.selected === old;
     let resources;
     try {
-      resources = await this.app.account.resourcesFor(this.app.account.accessToken);
+      resources = await this.app.account.profileAPI.resources();
     } catch (error) {
       if (isCurrent()) throw error;
       return;
     }
     if (!isCurrent()) return;
-    const server = resources.find((server) => server.clientIdentifier === old.serverID);
+    const server = resources.find((server) => server.id === old.serverID);
     if (!server) throw new Error("This server is no longer shared with the selected profile.");
-    for (const connection of P.connections(server, old.allowHTTP)) {
+    for (const connection of server.connections(old.allowHTTP)) {
       try {
-        const base = P.origin(connection.uri);
-        await this.app.request(base + "/library/sections", server.accessToken);
+        const api = server.connection(connection.uri, old.scope, old.allowHTTP);
+        await api.request("/library/sections");
         if (!isCurrent()) return;
-        old.base = base;
-        old.token = server.accessToken;
+        old.base = api.base;
+        old.token = api.token;
         await this.app.sync.recover(old);
         if (isCurrent()) this.app.send("reconnected", {});
         return;
@@ -171,32 +150,30 @@ class PlexLibrary {
     if (!Number.isInteger(start) || start < 0) throw new Error("Invalid page.");
     const params = { "X-Plex-Container-Start": start, "X-Plex-Container-Size": 60 };
     let container;
-    if (["continue", "next", "recent", "search"].includes(data.view) && !data.parent) {
-      const searching = data.view === "search";
-      const route = searching
-        ? "/hubs/search?" + P.query({ query: String(data.search || "").slice(0, 200), limit: start + 60 })
-        : "/hubs?" + P.query({ count: start + 60 });
-      const result = await this.app.request(connection.base + route, connection.token);
-      const hubs = result.MediaContainer.Hub || [];
-      const picked = searching
-        ? hubs
-        : hubs.filter((hub) => {
-            const key = String(hub.hubIdentifier || hub.key || "").toLowerCase();
-            return data.view === "continue"
-              ? key.includes("continue")
-              : data.view === "next"
-                ? key.includes("ondeck")
-                : key.includes("recentlyadded");
-          });
-      let all = P.uniqueItems(picked.flatMap((hub) => hub.Metadata || [])).filter((item) =>
-        ["movie", "episode", "show", "season"].includes(item.type)
+    if (data.view === "home" && !data.parent) {
+      const count = data.homeCount == null ? 60 : Number(data.homeCount);
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("Invalid Home page size.");
+      const hubs = await connection.home(count);
+      if (this.selected !== connection || generation !== this.browseGeneration) return;
+      const artwork = [];
+      for (const hub of hubs) artwork.push(...hub.items.slice(0, count));
+      this.rememberArtwork(artwork);
+      this.app.send("home", {
+        sections: hubs.map((hub) => hub.page(0, count)),
+        request: data.request,
+        serverID: connection.serverID
+      });
+      return;
+    }
+    if (data.view === "search" && !data.parent) {
+      const hub = await connection.search(String(data.search || "").slice(0, 200), start + 60);
+      if (this.selected !== connection || generation !== this.browseGeneration) return;
+      this.rememberArtwork(hub.items.slice(start, start + 60));
+      this.app.send(
+        "listing",
+        Object.assign(hub.page(start, 60), { request: data.request, serverID: connection.serverID })
       );
-      if (data.view === "recent") all.sort((a, b) => Number(b.addedAt || 0) - Number(a.addedAt || 0));
-      const more = picked.some(
-        (hub) => hub.more === true || hub.more === 1 || Number(hub.size) > (hub.Metadata || []).length
-      );
-      container = { Metadata: all.slice(start, start + 60) };
-      if (!more) container.totalSize = all.length;
+      return;
     } else {
       let route;
       if (data.parent) {
@@ -228,18 +205,36 @@ class PlexLibrary {
           params.year = String(data.year);
         }
       }
-      const result = await this.app.request(
-        connection.base + route + "?" + P.query(params),
-        connection.token
-      );
+      const result = await connection.request(route + "?" + P.query(params));
       container = result.MediaContainer;
     }
     if (this.selected !== connection || generation !== this.browseGeneration) return;
     container.Metadata = container.Metadata || [];
-    this.rememberArtwork(container.Metadata);
+    this.rememberArtwork(container.Metadata.map((item) => connection.media(item)));
     this.app.send(
       "listing",
-      Object.assign(P.listing(container, start, 60), { request: data.request, serverID: connection.serverID })
+      Object.assign(connection.page(container, start, 60), {
+        request: data.request,
+        serverID: connection.serverID
+      })
+    );
+  }
+
+  async loadHomeSection(data) {
+    if (!this.selected) throw new Error("Connect to a server first.");
+    const start = Number(data.start),
+      section = data.section;
+    if (!["continue", "next", "recent"].includes(section) || !Number.isInteger(start) || start < 0)
+      throw new Error("Invalid Home section page.");
+    const connection = this.selected,
+      generation = this.browseGeneration;
+    const hubs = await connection.home(start + 60);
+    if (this.selected !== connection || generation !== this.browseGeneration) return;
+    const hub = hubs.find((hub) => hub.type === section);
+    this.rememberArtwork(hub.items.slice(start, start + 60), true);
+    this.app.send(
+      "home-section",
+      Object.assign({ request: data.request, serverID: connection.serverID }, hub.page(start, 60))
     );
   }
 
@@ -250,10 +245,7 @@ class PlexLibrary {
       result = {};
     for (const kind of ["genre", "year"]) {
       try {
-        const response = await this.app.request(
-          connection.base + "/library/sections/" + library + "/" + kind,
-          connection.token
-        );
+        const response = await connection.request("/library/sections/" + library + "/" + kind);
         result[kind] = (response.MediaContainer.Directory || [])
           .filter((entry) => /^\d+$/.test(String(entry.key)))
           .map((entry) => ({ id: String(entry.key), title: entry.title }));
@@ -278,28 +270,16 @@ class PlexLibrary {
     if (this.app.sync.hasPending(connection, id)) {
       throw new Error("Wait for the playback position to sync, then try changing its watched state again.");
     }
-    await this.app.request(
-      connection.base +
-        "/:/" +
-        (data.watched === true ? "scrobble" : "unscrobble") +
-        "?" +
-        P.query({ key: id, identifier: "com.plexapp.plugins.library" }),
-      connection.token,
-      "put"
-    );
+    const media = await connection.media(id).update({ watched: data.watched === true });
     if (this.selected !== connection) return;
-    const item = await this.metadataAt(connection, id);
-    if (this.selected !== connection) return;
-    this.app.send("item-synced", {
-      serverID: connection.serverID,
-      item: P.listing({ Metadata: [item] }, 0, 1).items[0]
-    });
+    this.app.send("item-synced", { serverID: connection.serverID, item: media.snapshot });
   }
 
   async loadDetails(data) {
     if (!this.selected) throw new Error("Connect to a server first.");
     const connection = this.selected,
-      item = await this.metadataAt(connection, data.id);
+      media = await connection.media(data.id).load(),
+      item = media.data;
     if (this.selected !== connection) return;
     let options = { versions: [], streams: [], markers: [] };
     if (["movie", "episode"].includes(item.type)) {
@@ -322,7 +302,7 @@ class PlexLibrary {
           id: String(data.id),
           request: data.request,
           serverID: connection.serverID,
-          item: P.listing({ Metadata: [item] }, 0, 1).items[0]
+          item: media.snapshot
         },
         options
       )
@@ -336,7 +316,7 @@ class PlexLibrary {
       this.app.send("artwork-done", { id: data.id, request: data.request });
       return;
     }
-    const cacheKey = connection.scope + ":" + connection.serverID + ":" + poster.path;
+    const cacheKey = connection.scope + ":" + connection.serverID + ":" + poster.artworkPath;
     const cached = this.artworkCache.get(cacheKey);
     if (cached && Date.now() - cached.time < 600000) {
       this.artworkCache.delete(cacheKey);
@@ -348,17 +328,7 @@ class PlexLibrary {
     const temp = "@tmp/poster-" + ++this.artworkSerial + ".image";
     let handle;
     try {
-      const url =
-        connection.base +
-        "/photo/:/transcode?" +
-        P.query({
-          url: poster.path,
-          width: "360",
-          height: poster.wide ? "203" : "540",
-          minSize: "1",
-          upscale: "0"
-        });
-      await this.app.api.http.download(url, temp, { headers: this.app.headers(connection.token) });
+      await poster.downloadArtwork(temp);
       handle = this.app.api.file.handle(temp, "read");
       const bytes = handle.read(2 * 1024 * 1024 + 1);
       if (this.selected !== connection || !bytes || bytes.length > 2 * 1024 * 1024) return;
@@ -389,20 +359,18 @@ class PlexLibrary {
   async leaves(connection, id, isCurrent = () => true) {
     const all = [];
     for (let start = 0; start < 5000; start += 200) {
-      const result = await this.app.request(
-        connection.base +
-          "/library/metadata/" +
+      const result = await connection.request(
+        "/library/metadata/" +
           P.id(id) +
           "/allLeaves?" +
-          P.query({ "X-Plex-Container-Start": start, "X-Plex-Container-Size": 200 }),
-        connection.token
+          P.query({ "X-Plex-Container-Start": start, "X-Plex-Container-Size": 200 })
       );
       if (!isCurrent()) return [];
       const container = result.MediaContainer,
         items = container.Metadata || [];
       all.push(...items);
       if (items.length < 200 || (container.totalSize != null && all.length >= Number(container.totalSize)))
-        return P.uniqueItems(all);
+        return P.uniqueItems(all).map((item) => connection.media(item));
     }
     throw new Error("This show is too large to queue at once. Choose a season instead.");
   }

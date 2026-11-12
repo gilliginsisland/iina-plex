@@ -25,14 +25,12 @@ function valid(record) {
   );
 }
 const position = (value) => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 0);
-const key = (entry) => entry.connection.scope + ":" + entry.connection.serverID + ":" + entry.ratingKey;
+const key = (entry) => entry.api.scope + ":" + entry.api.serverID + ":" + entry.ratingKey;
 const matches = (entry, sender) =>
   String(sender) === String(entry.playerID) || String(sender) === entry.playerID + "-io.iina.plex-library";
 
 class TimelineSync {
-  constructor(http, headers, notify, store = {}) {
-    this.http = http;
-    this.headers = headers;
+  constructor(notify, store = {}) {
     this.notify = notify;
     this.store = store;
     this.sessions = {};
@@ -95,8 +93,8 @@ class TimelineSync {
     this.journal = this.journal.filter((record) => record.key !== itemKey && valid(record));
     const record = {
       key: itemKey,
-      scope: entry.connection.scope || "",
-      serverID: entry.connection.serverID,
+      scope: entry.api.scope || "",
+      serverID: entry.api.serverID,
       ratingKey: entry.ratingKey,
       time: update.time,
       duration: update.duration,
@@ -109,10 +107,10 @@ class TimelineSync {
     return record;
   }
 
-  bind(playerID, sessionID, connection, ratingKey, baseline = 0) {
+  bind(playerID, sessionID, api, ratingKey, baseline = 0) {
     const entry = {
       playerID,
-      connection,
+      api,
       ratingKey: String(ratingKey),
       pending: null,
       sending: false,
@@ -136,16 +134,9 @@ class TimelineSync {
 
   async refreshItem(sessionID, entry) {
     try {
-      const response = await this.http.get(entry.connection.base + "/library/metadata/" + entry.ratingKey, {
-        headers: this.headers(entry.connection.token)
-      });
-      if (response.statusCode < 200 || response.statusCode >= 300 || this.sessions[sessionID] !== entry)
-        return;
-      const data = response.data || JSON.parse(response.text);
-      const item = (data.MediaContainer.Metadata || [])[0];
-      if (item && String(item.ratingKey) === entry.ratingKey) {
-        this.notify("item-synced", { serverID: entry.connection.serverID, item });
-      }
+      const item = await entry.api.media(entry.ratingKey).load();
+      if (this.sessions[sessionID] !== entry) return;
+      this.notify("item-synced", { serverID: entry.api.serverID, item: item.snapshot });
     } catch (_) {
       /* A metadata refresh must not turn an acknowledged update into a retry. */
     }
@@ -165,13 +156,11 @@ class TimelineSync {
         duration: update.duration
       };
       try {
-        const requestHeaders = this.headers(entry.connection.token);
-        requestHeaders["X-Plex-Session-Identifier"] = sessionID;
-        const response = await this.http.post(entry.connection.base + "/:/timeline?" + query(params), {
-          headers: requestHeaders
+        await entry.api.request("/:/timeline?" + query(params), {
+          method: "post",
+          format: "none",
+          headers: { "X-Plex-Session-Identifier": sessionID }
         });
-        if (!response || response.statusCode < 200 || response.statusCode >= 300)
-          throw new Error("Timeline rejected");
         if (this.sessions[sessionID] !== entry) break;
         entry.lastAck = update.time;
         this.remove(update.record);
@@ -180,7 +169,7 @@ class TimelineSync {
         entry.warned = false;
         this.notify("progress-synced", {
           id: entry.ratingKey,
-          serverID: entry.connection.serverID,
+          serverID: entry.api.serverID,
           time: update.time,
           duration: update.duration
         });
@@ -254,9 +243,9 @@ class TimelineSync {
     }
   }
 
-  async recover(connection, onlyID) {
+  async recover(api, onlyID) {
     this.prune();
-    const recoveryKey = connection.scope + ":" + connection.serverID;
+    const recoveryKey = api.scope + ":" + api.serverID;
     // Queue requests so a caller's item filter isn't lost behind another recovery.
     const previous = this.recovering.get(recoveryKey),
       current = this.generation;
@@ -265,8 +254,8 @@ class TimelineSync {
       if (this.generation !== current) return;
       for (const [id, entry] of Object.entries(this.sessions)) {
         if (
-          entry.connection.scope !== connection.scope ||
-          entry.connection.serverID !== connection.serverID ||
+          entry.api.scope !== api.scope ||
+          entry.api.serverID !== api.serverID ||
           (onlyID && entry.ratingKey !== String(onlyID))
         )
           continue;
@@ -276,27 +265,21 @@ class TimelineSync {
       }
       for (const record of this.journal.slice()) {
         if (
-          record.scope !== connection.scope ||
-          record.serverID !== connection.serverID ||
+          record.scope !== api.scope ||
+          record.serverID !== api.serverID ||
           (onlyID && record.ratingKey !== String(onlyID)) ||
           this.activeFor(record)
         )
           continue;
         try {
-          const response = await this.http.get(connection.base + "/library/metadata/" + record.ratingKey, {
-            headers: this.headers(connection.token)
-          });
-          if (response.statusCode < 200 || response.statusCode >= 300) continue;
-          const data = response.data || JSON.parse(response.text);
-          const item = (data.MediaContainer.Metadata || [])[0];
-          if (!item || String(item.ratingKey) !== record.ratingKey) continue;
+          const item = await api.media(record.ratingKey).load();
           if (this.generation !== current) return;
           if (!this.journal.includes(record) || this.activeFor(record)) continue;
-          const serverTime = position(item.viewOffset);
+          const serverTime = position(item.offset);
           // Preserve another client's activity, and don't repeat an already applied update.
           if (
             serverTime === record.time ||
-            Number(item.lastViewedAt || 0) * 1000 > record.updatedAt + 1000 ||
+            item.lastViewedAt * 1000 > record.updatedAt + 1000 ||
             (serverTime !== record.baseline && serverTime !== record.time)
           ) {
             this.remove(record);
@@ -311,14 +294,10 @@ class TimelineSync {
             offline: 1,
             updated: Math.floor(record.updatedAt / 1000)
           };
-          const result = await this.http.post(connection.base + "/:/timeline?" + query(params), {
-            headers: this.headers(connection.token)
-          });
+          await api.request("/:/timeline?" + query(params), { method: "post", format: "none" });
           if (this.generation !== current) return;
-          if (result.statusCode >= 200 && result.statusCode < 300) {
-            this.remove(record);
-            this.notify("sync-recovered", {});
-          }
+          this.remove(record);
+          this.notify("sync-recovered", {});
         } catch (_) {
           /* Keep the record for the next authenticated reconnect. */
         }
@@ -332,26 +311,22 @@ class TimelineSync {
     }
   }
 
-  pendingPosition(connection, id, item) {
+  pendingPosition(api, id, item) {
     this.prune();
     const record = this.journal.find(
       (record) =>
-        record.scope === connection.scope &&
-        record.serverID === connection.serverID &&
-        record.ratingKey === String(id)
+        record.scope === api.scope && record.serverID === api.serverID && record.ratingKey === String(id)
     );
-    if (!record || Number(item.lastViewedAt || 0) * 1000 > record.updatedAt + 1000) return null;
-    const current = position(item.viewOffset);
+    if (!record || item.lastViewedAt * 1000 > record.updatedAt + 1000) return null;
+    const current = position(item.offset);
     return current === record.baseline || current === record.time ? record.time : null;
   }
 
-  hasPending(connection, id) {
+  hasPending(api, id) {
     this.prune();
     return this.journal.some(
       (record) =>
-        record.scope === connection.scope &&
-        record.serverID === connection.serverID &&
-        record.ratingKey === String(id)
+        record.scope === api.scope && record.serverID === api.serverID && record.ratingKey === String(id)
     );
   }
 }

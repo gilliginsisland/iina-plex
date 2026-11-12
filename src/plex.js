@@ -29,23 +29,6 @@ function connections(server, allowHTTP) {
   }).sort((a, b) => score(a) - score(b));
 }
 function score(c) { return (flag(c.relay) ? 10 : 0) + (c.uri.indexOf("https://") === 0 ? 0 : 4) + (flag(c.local) ? 0 : 2); }
-function listing(container, start, pageSize) {
-  const items = container.Metadata || [];
-  const reportedTotal = container.totalSize == null || String(container.totalSize).trim() === "" ? NaN : Number(container.totalSize);
-  const total = Number.isInteger(reportedTotal) && reportedTotal >= 0 ? reportedTotal : null;
-  return {
-    items: items.map(item => ({
-      id: id(item.ratingKey), title: item.title || "Untitled", type: item.type,
-      year: item.year || "", edition:item.editionTitle||"", summary: item.summary || "", duration: item.duration || 0,
-      index: item.index, parentIndex: item.parentIndex, showId: item.grandparentRatingKey || "", libraryId: item.librarySectionID || "", rating: item.contentRating || "", score: item.rating || item.audienceRating || "",
-      watched: Number(item.viewCount || 0) > 0,
-      progress: item.duration ? Math.min(1, Math.max(0, Number(item.viewOffset || 0) / item.duration)) : 0,
-      episodes: item.leafCount || 0, parentTitle: item.grandparentTitle || item.parentTitle || "",
-      playable: ["movie", "episode"].indexOf(item.type) !== -1
-    })),
-    start, total, next: items.length > 0 && (total === null ? items.length >= pageSize : start + items.length < total) ? start + items.length : null
-  };
-}
 function parts(metadata, mediaIndex = 0) {
   const media = (metadata.Media || [])[mediaIndex];
   if (!media || !media.Part || !media.Part.length) throw new Error("No playable media file was returned by Plex.");
@@ -93,4 +76,4 @@ function uniqueItems(items) {
   });
 }
 
-module.exports = { query, origin, path, id, flag, connections, listing, parts, resumePoint, imageData, uniqueItems };
+module.exports = { query, origin, path, id, flag, connections, parts, resumePoint, imageData, uniqueItems };

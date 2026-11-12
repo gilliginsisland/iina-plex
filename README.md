@@ -44,8 +44,10 @@ saved. If that authorization expires or is revoked, select the profile again.
 
 ## Browse and play
 
-Use **Continue Watching**, **Up Next**, or **Recently Added** in the sidebar,
-or select a movie or TV library. Open a show and season to browse its episodes.
+Open **Home** for **Continue Watching**, **Up Next**, and **Recently Added**, in
+that order on one scrollable page. Each section has its own grid and a **Show
+more** button when additional titles are available. You can also select a movie
+or TV library, then open a show and season to browse its episodes.
 
 - Click a **poster** to play or resume a movie or episode. The library window
   hides when playback starts; reopen it from **Browse Plex Library…** to keep browsing.

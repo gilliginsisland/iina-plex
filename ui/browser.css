@@ -3,6 +3,7 @@
 [hidden] { display:none !important; }
 body { margin:0; height:100vh; overflow:hidden; }
 plex-browser { display:flex; height:100vh; }
+plex-sidebar { display:flex; flex-shrink:0; }
 plex-library-list, plex-library-item, plex-media-item, plex-media-details { display:block; }
 plex-crumb { display:inline; }
 plex-crumb:not(:last-child)::after { content:"/"; color:#777; margin-left:8px; }
@@ -77,6 +78,12 @@ h1 { font-size:26px; font-weight:600; letter-spacing:-.5px; margin:7px 0 0; }
 .card-meta { color:#888; font-size:11px; margin-top:5px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .card.episode .poster { aspect-ratio:16/9; }
 .grid.episodes { grid-template-columns:repeat(auto-fill,minmax(225px,1fr)); }
+plex-media-section { display:block; padding:25px 0 8px; }
+plex-media-section + plex-media-section { border-top:1px solid #ffffff10; margin-top:22px; }
+.media-section-heading { padding:0; gap:12px; }
+.media-section-heading h2 { font-size:20px; margin:0; }
+.media-section-heading > span { color:var(--muted); font-size:11px; }
+.section-more { display:block; margin:22px auto 0; }
 .pagination { display:flex; justify-content:center; gap:12px; margin-top:30px; }
 footer { margin-top:36px; padding:18px 0; border-top:1px solid #ffffff0b; font-size:9px; letter-spacing:1px; color:#666; }
 footer span { float:right; letter-spacing:0; }

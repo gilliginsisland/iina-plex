@@ -1,4 +1,4 @@
-const P = require("./plex.js");
+const PlexAPI = require("./plex-api.js");
 const PlexAccount = require("./account.js");
 const PlexLibrary = require("./library.js");
 const PlexPlayers = require("./players.js");
@@ -14,31 +14,18 @@ class PlexPlugin {
       api.preferences.set("clientID", this.clientID);
       api.preferences.sync();
     }
+    this.plex = new PlexAPI(api.http, { clientID: this.clientID, version: "0.7.6" });
     this.account = new PlexAccount(this);
     this.library = new PlexLibrary(this);
     this.players = new PlexPlayers(this);
     this.queue = new PlaybackQueue(this);
-    this.sync = new TimelineSync(
-      api.http,
-      (token) => this.headers(token),
-      (name, data) => {
-        if (name === "item-synced") {
-          try {
-            this.send(name, {
-              serverID: data.serverID,
-              item: P.listing({ Metadata: [data.item] }, 0, 1).items[0]
-            });
-          } catch (_) {}
-        } else this.send(name, data);
-      },
-      {
-        load: () => api.preferences.get("progressJournal") || [],
-        save: (records) => {
-          api.preferences.set("progressJournal", records);
-          api.preferences.sync();
-        }
+    this.sync = new TimelineSync((name, data) => this.send(name, data), {
+      load: () => api.preferences.get("progressJournal") || [],
+      save: (records) => {
+        api.preferences.set("progressJournal", records);
+        api.preferences.sync();
       }
-    );
+    });
   }
 
   start() {
@@ -75,34 +62,6 @@ class PlexPlugin {
     });
   }
 
-  headers(accessToken) {
-    const h = {
-      Accept: "application/json",
-      "X-Plex-Product": "IINA Plex Library",
-      "X-Plex-Version": "0.7.6",
-      "X-Plex-Client-Identifier": this.clientID
-    };
-    if (accessToken) h["X-Plex-Token"] = accessToken;
-    return h;
-  }
-
-  async request(url, accessToken, method) {
-    try {
-      const res = await this.api.http[method || "get"](url, { headers: this.headers(accessToken) });
-      if (res.statusCode < 200 || res.statusCode >= 300) throw res;
-      if (!res.text && res.data == null) return {};
-      return res.data || JSON.parse(res.text);
-    } catch (error) {
-      // Never forward raw networking errors: they can contain credentials and URLs.
-      if (error && (error.statusCode === 401 || error.statusCode === 403)) {
-        const denied = new Error("Plex denied access. Sign in again or check this library’s permissions.");
-        denied.denied = true;
-        throw denied;
-      }
-      throw new Error("Plex could not complete the request. Check your connection and try again.");
-    }
-  }
-
   guarded(name, action) {
     this.api.standaloneWindow.onMessage(name, async (data) => {
       const activeSession = this.account.revision;
@@ -110,7 +69,12 @@ class PlexPlugin {
         await action(data || {});
       } catch (error) {
         if (activeSession === this.account.revision)
-          this.send("failure", { message: error.message, request: data && data.request, operation: name });
+          this.send("failure", {
+            message: error.message,
+            request: data && data.request,
+            section: data && data.section,
+            operation: name
+          });
       }
     });
   }

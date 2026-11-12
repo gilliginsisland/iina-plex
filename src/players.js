@@ -130,11 +130,7 @@ class PlexPlayers {
     const download = async (path, suffix) => {
       files.push(path);
       try {
-        await this.app.api.http.download(
-          connection.base + "/library/streams/" + P.id(stream.id) + "." + suffix,
-          path,
-          { headers: this.app.headers(connection.token) }
-        );
+        await connection.download("/library/streams/" + P.id(stream.id) + "." + suffix, path);
       } catch (_) {
         throw new Error("The subtitle could not be downloaded. Choose another track or reconnect.");
       }
@@ -190,11 +186,12 @@ class PlexPlayers {
     try {
       await this.app.sync.recover(connection, id);
       if (!isCurrent()) return null;
-      const item = await this.app.library.metadataAt(connection, id);
+      const media = await connection.media(id).load(),
+        item = media.data;
       if (!isCurrent()) return null;
       if (!["movie", "episode"].includes(item.type)) throw new Error("Select a movie or episode to play.");
       const serverBaseline = Number(item.viewOffset) || 0;
-      const saved = this.app.sync.pendingPosition(connection, id, item);
+      const saved = this.app.sync.pendingPosition(connection, id, media);
       if (saved !== null && !options.restart) item.viewOffset = saved;
       const chosen = Media.chooseVersion(item, options.versionId),
         parts = chosen.media.Part || [];

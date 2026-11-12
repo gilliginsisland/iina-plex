@@ -1,5 +1,3 @@
-const P = require("./plex.js");
-
 // Owns queue ordering, preparation, cancellation and the automatic-next countdown.
 class PlaybackQueue {
   constructor(app) {
@@ -146,7 +144,7 @@ class PlaybackQueue {
     const isCurrent = () => this.app.library.selected === connection && generation === this.generation;
     let item;
     try {
-      item = await this.app.library.metadataAt(connection, data.id);
+      item = await connection.media(data.id).load();
     } catch (error) {
       if (isCurrent()) throw error;
       return;
@@ -154,7 +152,7 @@ class PlaybackQueue {
     if (!isCurrent()) return;
     if (!["movie", "episode"].includes(item.type)) throw new Error("Choose a movie or episode.");
     const record = {
-      id: P.id(item.ratingKey),
+      id: item.id,
       title: item.title,
       connection,
       options: { versionId: data.versionId, audioId: data.audioId, subtitleId: data.subtitleId }
@@ -206,11 +204,10 @@ class PlaybackQueue {
       preparation === this.preparation;
     let parent, episodes;
     try {
-      parent = await this.app.library.metadataAt(connection, data.id);
+      parent = await connection.media(data.id).load();
       if (!isCurrent()) return;
       if (!["show", "season", "episode"].includes(parent.type)) throw new Error("Choose a show or season.");
-      const id =
-        parent.type === "episode" ? parent.grandparentRatingKey || parent.parentRatingKey : parent.ratingKey;
+      const id = parent.type === "episode" ? parent.showId || parent.parentId : parent.id;
       episodes = (await this.app.library.leaves(connection, id, isCurrent)).filter(
         (item) => item.type === "episode"
       );
@@ -220,21 +217,18 @@ class PlaybackQueue {
     }
     if (!isCurrent()) return;
     if (parent.type === "show" && !this.app.settings.includeSpecials)
-      episodes = episodes.filter((item) => Number(item.parentIndex) !== 0);
-    episodes.sort(
-      (a, b) =>
-        Number(a.parentIndex || 0) - Number(b.parentIndex || 0) || Number(a.index || 0) - Number(b.index || 0)
-    );
+      episodes = episodes.filter((item) => item.seasonNumber !== 0);
+    episodes.sort((a, b) => a.seasonNumber - b.seasonNumber || a.episodeNumber - b.episodeNumber);
     if (parent.type === "episode") {
-      const index = episodes.findIndex((item) => String(item.ratingKey) === String(parent.ratingKey));
+      const index = episodes.findIndex((item) => item.id === parent.id);
       if (index < 0) throw new Error("This episode is no longer in the show. Refresh and try again.");
       episodes = episodes.slice(index);
     }
     if (!isCurrent()) return;
     if (!episodes.length) throw new Error("No playable episodes found.");
     const prepared = episodes.map((item) => ({
-      id: P.id(item.ratingKey),
-      title: (item.grandparentTitle ? item.grandparentTitle + " · " : "") + item.title,
+      id: item.id,
+      title: (item.showTitle ? item.showTitle + " · " : "") + item.title,
       connection,
       options: {}
     }));

@@ -1,12 +1,11 @@
 const P = require("./plex.js");
-const Media = require("./media.js");
 const CredentialStore = require("./storage.js");
-const RESOURCES_URL = "https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1";
 
 // Owns Plex sign-in, remembered credentials and the active Home profile.
 class PlexAccount {
   constructor(app) {
     this.app = app;
+    this.api = app.plex;
     this.restored = false;
     this.restoring = null;
     this.token = null;
@@ -49,7 +48,7 @@ class PlexAccount {
     }
     const pending = { session: currentSession, token: accessToken };
     pending.promise = (async () => {
-      const user = await this.app.request("https://plex.tv/api/v2/user", accessToken);
+      const user = await this.api.withToken(accessToken).request("/api/v2/user");
       if (currentSession !== this.revision || accessToken !== this.token)
         throw new Error("Plex account changed. Try again.");
       if (!user || !/^\d+$/.test(String(user.id)))
@@ -66,10 +65,22 @@ class PlexAccount {
     }
   }
 
-  async resourcesFor(accessToken) {
-    const resources = await this.app.request(RESOURCES_URL, accessToken);
-    if (!Array.isArray(resources)) throw new Error("Plex did not return a valid server list. Try again.");
-    return resources;
+  get token() {
+    return this.api.token;
+  }
+  set token(value) {
+    this.api.token = value;
+  }
+  get profileAPI() {
+    return this._profileAPI || this.api;
+  }
+
+  get profileToken() {
+    return this._profileAPI ? this._profileAPI.token : null;
+  }
+
+  set profileToken(value) {
+    this._profileAPI = value ? this.api.withToken(value) : null;
   }
 
   get scope() {
@@ -126,7 +137,7 @@ class PlexAccount {
         this.token && this.accountID ? this.credentials.loadProfile(this.accountID, remembered) : null;
       if (!saved) return;
       try {
-        await this.resourcesFor(saved);
+        await this.api.withToken(saved).resources();
         if (currentSession !== this.revision) return;
         this.profileToken = saved;
         this.needsProfile = false;
@@ -146,15 +157,7 @@ class PlexAccount {
 
   async homeRequest(path, method = "get") {
     try {
-      const result = await this.app.api.http[method]("https://plex.tv" + path, {
-        headers: this.app.headers(this.token)
-      });
-      if (result.statusCode < 200 || result.statusCode >= 300) throw new Error("denied");
-      if (result.data && typeof result.data === "object") return result.data;
-      const text = result.text || "";
-      if (text.trim().startsWith("<"))
-        return { users: Media.xmlAttributes(text, "User"), user: Media.xmlAttributes(text, "user")[0] };
-      return JSON.parse(text);
+      return await this.api.request(path, { method, format: "home" });
     } catch (_) {
       throw new Error("Plex Home is unavailable, or the profile PIN was not accepted.");
     }
@@ -162,7 +165,7 @@ class PlexAccount {
 
   async signIn() {
     const generation = ++this.authGeneration;
-    const pin = await this.app.request("https://plex.tv/api/v2/pins?strong=true", null, "post");
+    const pin = await this.api.withToken(null).request("/api/v2/pins?strong=true", { method: "post" });
     if (generation !== this.authGeneration) return;
     const authURL =
       "https://app.plex.tv/auth#?" +
@@ -178,7 +181,7 @@ class PlexAccount {
     while (generation === this.authGeneration && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       if (generation !== this.authGeneration) return;
-      const result = await this.app.request("https://plex.tv/api/v2/pins/" + P.id(pin.id), null);
+      const result = await this.api.withToken(null).request("/api/v2/pins/" + P.id(pin.id));
       if (generation !== this.authGeneration) return;
       if (result.authToken) {
         this.app.disableSync();
@@ -277,7 +280,7 @@ class PlexAccount {
     const current = result.user || result.User || result;
     const switched = current.authenticationToken || current.authToken;
     if (typeof switched !== "string" || !switched) throw new Error("Plex did not authorize this profile.");
-    await this.resourcesFor(switched);
+    await this.api.withToken(switched).resources();
     if (currentSession !== this.revision) return;
     this.app.disableSync();
     this.revision++;
