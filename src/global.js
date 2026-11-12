@@ -79,7 +79,7 @@ class PlexPlugin {
     const h = {
       Accept: "application/json",
       "X-Plex-Product": "IINA Plex Library",
-      "X-Plex-Version": "0.7.6-pre",
+      "X-Plex-Version": "0.7.6",
       "X-Plex-Client-Identifier": this.clientID
     };
     if (accessToken) h["X-Plex-Token"] = accessToken;
