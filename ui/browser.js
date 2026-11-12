@@ -371,7 +371,7 @@ class PlexMediaDetails extends PlexElement {
     this.listen(this.part("watched"),"click",()=>this.emit("media-watched",{item:this,watched:!this.watched}));
   }
   disconnected() { if (this.part("dialog").open) this.part("dialog").close(); }
-  playbackOptions() { return {versionId:this.part("version").value,audioId:this.part("audio").value,subtitleId:this.part("subtitle").value}; }
+  get playbackOptions() { return {versionId:this.part("version").value,audioId:this.part("audio").value,subtitleId:this.part("subtitle").value}; }
   configure(data) {
     const fill=(name,entries,initial)=>{
       const select=this.part(name);select.replaceChildren();
@@ -481,7 +481,7 @@ class PlexBrowser extends PlexElement {
     this.listen(this,"media-play",event=>this.play(event.detail.item,event.detail));
     this.listen(this,"media-details",event=>{const details=this.view("details");details.copyFrom(event.detail.item);details.open=true;this.loadDetails();});
     this.listen(this,"playback-options",event=>this.loadDetails(event.detail.versionId));
-    this.listen(this,"media-queue",event=>this.post("queue-add",Object.assign({id:event.detail.item.ratingKey,position:event.detail.position},this.view("details").playbackOptions())));
+    this.listen(this,"media-queue",event=>this.post("queue-add",Object.assign({id:event.detail.item.ratingKey,position:event.detail.position},this.view("details").playbackOptions)));
     this.listen(this,"media-watched",event=>this.post("watched",{id:event.detail.item.ratingKey,watched:event.detail.watched}));
     this.listen(this,"queue-action",event=>this.queueAction(event.detail));
     this.listen(this,"artwork-request",event=>this.post("artwork",event.detail));
@@ -521,7 +521,7 @@ class PlexBrowser extends PlexElement {
     for(const button of this.view("discovery").children)button.classList.toggle("active",button.dataset.view===this.section);
   }
   crumb(item){return document.createElement("plex-crumb").setProperties({ratingKey:item.ratingKey,mediaTitle:item.mediaTitle,mediaType:item.mediaType});}
-  libraryID(){return this.view("libraries").value||this._rememberedLibrary||this.view("libraries").firstElementChild&&this.view("libraries").firstElementChild.ratingKey||"";}
+  get libraryID(){return this.view("libraries").value||this._rememberedLibrary||this.view("libraries").firstElementChild&&this.view("libraries").firstElementChild.ratingKey||"";}
   applyMetadata(item,data){return item.setProperties({ratingKey:data.id,mediaTitle:data.title,mediaType:data.type,year:data.year,edition:data.edition,summary:data.summary,duration:data.duration,index:data.index,rating:data.rating,score:data.score,parentIndex:data.parentIndex,libraryId:data.libraryId,showId:data.showId,watched:data.watched,progress:data.progress,episodes:data.episodes,parentTitle:data.parentTitle,playable:data.playable});}
   clearListing(){this.view("details").open=false;const list=this.view("items");list.batch(()=>{list.replaceChildren();list.setProperties({request:this.request,pageStart:0,total:0,nextStart:-1});});this.pagination(0);}
   resetNavigation(){this.request++;this.clearListing();this.view("libraries").replaceChildren();this.view("libraries").value="";this.view("breadcrumbs").replaceChildren();this.view("search-form").hidden=true;}
@@ -539,10 +539,10 @@ class PlexBrowser extends PlexElement {
     const top=path.childElementCount===1;this.view("search-form").hidden=!top;this.view("filters").hidden=!(top&&this.section==="library");this.view("sort").disabled=!top||this.section!=="library";
     this.view("back").disabled=top;this.view("play-season").hidden=top||!["show","season"].includes(current.mediaType);this.view("play-season").textContent=current.mediaType==="show"?"Play show":"Play season";
     current.pageStart=start;this._lastRefresh=Date.now();
-    this.post("browse",{view:this.section,library:this.section==="library"?path.firstElementChild.ratingKey:this.libraryID(),parent:top?null:current.ratingKey,parentType:current.mediaType,search:top?this.view("search").value:"",sort:this.view("sort").value,watch:this.view("watch-filter").value,genre:this.view("genre-filter").value,year:this.view("year-filter").value,start,request:this.request});
+    this.post("browse",{view:this.section,library:this.section==="library"?path.firstElementChild.ratingKey:this.libraryID,parent:top?null:current.ratingKey,parentType:current.mediaType,search:top?this.view("search").value:"",sort:this.view("sort").value,watch:this.view("watch-filter").value,genre:this.view("genre-filter").value,year:this.view("year-filter").value,start,request:this.request});
   }
   connect(){if(!this.view("servers").value||this.busy)return;this.busy=true;this.resetNavigation();this.status("Connecting to server…");this.post("connect",{id:this.view("servers").value,allowHTTP:this.view("allow-http").checked});}
-  play(item,options={}){if(item===this.view("details"))options=Object.assign({},item.playbackOptions(),options);this.view("details").open=false;this.status("Opening “"+item.mediaTitle+"” in IINA…");this.post("play",{id:item.ratingKey,restart:options.restart===true,versionId:options.versionId,audioId:options.audioId,subtitleId:options.subtitleId});}
+  play(item,options={}){if(item===this.view("details"))options=Object.assign({},item.playbackOptions,options);this.view("details").open=false;this.status("Opening “"+item.mediaTitle+"” in IINA…");this.post("play",{id:item.ratingKey,restart:options.restart===true,versionId:options.versionId,audioId:options.audioId,subtitleId:options.subtitleId});}
   queueAction(detail){this.post("queue-action",Object.assign({revision:Number(this.view("queue").getAttribute("revision"))},detail));}
   loadDetails(versionId){const details=this.view("details");details.request++;details.loading=true;this.post("details",{id:details.ratingKey,request:details.request,versionId});}
   syncDetails(item){const details=this.view("details");if(details.open&&details.ratingKey===item.ratingKey)details.copyFrom(item);}
@@ -581,7 +581,7 @@ class PlexBrowser extends PlexElement {
       this.openView("continue");
     });
     on("filters",data=>{
-      if(data.serverID!==this.view("servers").value||data.library!==this.libraryID())return;
+      if(data.serverID!==this.view("servers").value||data.library!==this.libraryID)return;
       for(const kind of ["genre","year"]){const select=this.view(kind+"-filter"),old=select.value;select.disabled=false;select.replaceChildren();const any=document.createElement("option");any.value="";any.textContent=kind==="genre"?"All genres":"All years";select.append(any);for(const entry of data[kind]||[]){const option=document.createElement("option");option.value=entry.id;option.textContent=entry.title;select.append(option);}select.value=old;}
     });
     on("listing",data=>{

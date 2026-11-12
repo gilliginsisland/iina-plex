@@ -83,4 +83,14 @@ function imageData(bytes) {
   }
   return "data:" + mime + ";base64," + encoded;
 }
-module.exports = { query, origin, path, id, flag, connections, listing, parts, resumePoint, imageData };
+function uniqueItems(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const id = String(item.ratingKey || "");
+    if (!/^\d+$/.test(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+module.exports = { query, origin, path, id, flag, connections, listing, parts, resumePoint, imageData, uniqueItems };

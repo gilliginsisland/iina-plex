@@ -1,30 +1,58 @@
-// Only managed Plex windows receive credentials or report progress.
-if(iina.global.getLabel()==="plex-playback"){
-  let tracker,lastState="";
-  const intro=iina.menu.item("Skip intro",()=>tracker.skip("intro"),{enabled:false});
-  const credits=iina.menu.item("Skip credits",()=>tracker.skip("credits"),{enabled:false});
-  const update=()=>{
-    if(!tracker)return;intro.enabled=tracker.available("intro");credits.enabled=tracker.available("credits");
-    const state=tracker.status(),serialized=JSON.stringify(state);
-    if(state.sessionID&&serialized!==lastState){lastState=serialized;iina.global.postMessage("player-state",state);}
-  };
-  tracker=require("./playback.js")(iina,update);
-  // Global messages run synchronously on their sender's thread, including HTTP callbacks.
-  // IINA timers run on the main thread; return to the sender before touching player/UI APIs.
-  const onMessage=(name,callback)=>iina.global.onMessage(name,data=>{setTimeout(()=>callback(data),0);});
-  onMessage("play-media",data=>{
-    iina.menu.removeAllItems();
-    if((data.markers||[]).some(marker=>marker.type==="intro"))iina.menu.addItem(intro);
-    if((data.markers||[]).some(marker=>marker.type==="credits"))iina.menu.addItem(credits);
-    try { tracker.open(data); }
-    catch (_) { iina.global.postMessage("playback-error",{sessionID:data.sessionID}); }
-  });
-  onMessage("disable-sync",()=>tracker.disable());
-  onMessage("activate-player",()=>{iina.core.window.miniaturized=false;});
-  onMessage("player-control",data=>{
-    if(data.action==="skip-intro")tracker.skip("intro");
-    if(data.action==="skip-credits")tracker.skip("credits");
-    if(data.action==="stop")iina.core.stop();
-    if(data.action==="activate")iina.core.window.miniaturized=false;
-  });
+const PlaybackTracker = require("./playback.js");
+
+// One controller per managed Plex window; unrelated IINA windows stay untouched.
+class PlexPlayer {
+  constructor(api) {
+    this.api = api;
+    this.lastState = "";
+    this.intro = api.menu.item("Skip intro", () => this.tracker.skip("intro"), { enabled: false });
+    this.credits = api.menu.item("Skip credits", () => this.tracker.skip("credits"), { enabled: false });
+    this.tracker = new PlaybackTracker(api, () => this.publishState());
+    this.onMessage("play-media", (data) => this.open(data));
+    this.onMessage("disable-sync", () => this.tracker.disable());
+    this.onMessage("activate-player", () => {
+      api.core.window.miniaturized = false;
+    });
+    this.onMessage("player-control", (data) => this.control(data.action));
+  }
+
+  publishState() {
+    if (!this.tracker) return;
+    this.intro.enabled = this.tracker.available("intro");
+    this.credits.enabled = this.tracker.available("credits");
+    const state = this.tracker.status,
+      serialized = JSON.stringify(state);
+    if (state.sessionID && serialized !== this.lastState) {
+      this.lastState = serialized;
+      this.api.global.postMessage("player-state", state);
+    }
+  }
+
+  onMessage(name, callback) {
+    // Global delivery can originate on an HTTP worker. IINA timers run on the main
+    // thread; return to the sender before touching player or UI APIs.
+    this.api.global.onMessage(name, (data) => {
+      setTimeout(() => callback(data), 0);
+    });
+  }
+
+  open(data) {
+    this.api.menu.removeAllItems();
+    if ((data.markers || []).some((marker) => marker.type === "intro")) this.api.menu.addItem(this.intro);
+    if ((data.markers || []).some((marker) => marker.type === "credits")) this.api.menu.addItem(this.credits);
+    try {
+      this.tracker.open(data);
+    } catch (_) {
+      this.api.global.postMessage("playback-error", { sessionID: data.sessionID });
+    }
+  }
+
+  control(action) {
+    if (action === "skip-intro") this.tracker.skip("intro");
+    if (action === "skip-credits") this.tracker.skip("credits");
+    if (action === "stop") this.api.core.stop();
+    if (action === "activate") this.api.core.window.miniaturized = false;
+  }
 }
+
+if (iina.global.getLabel() === "plex-playback") new PlexPlayer(iina);
