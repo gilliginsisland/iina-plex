@@ -389,8 +389,6 @@ async function launch(connection,id,options={},reusePlayer=null) {
     const urls=P.parts(item,chosen.choice.index).map(path=>connection.base+path);
     const resume=options.restart===true?{index:0,position:0}:P.resumePoint(item,chosen.choice.index);
     const sessionID=clientID+"-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2);
-    const playlistFile="@tmp/plex-"+sessionID.replace(/[^a-zA-Z0-9-]/g,"")+".m3u";
-    files.push(playlistFile);
     const title=Media.playbackTitle(item);
     const preferred=settings(),initial=Media.selectTracks(parts[resume.index],options,preferred),tracks=[];
     for(let index=0;index<parts.length;index++){
@@ -407,7 +405,7 @@ async function launch(connection,id,options={},reusePlayer=null) {
       for(const [oldKey,old]of livePlayers)if(old.playerID===playerID){livePlayers.delete(oldKey);setTimeout(()=>cleanFiles(old),30000);}
       livePlayers.set(key,entry);publishPlayers();sync.bind(playerID,sessionID,connection,id,serverBaseline);
       const partDurations=parts.map(part=>Number(part.duration)>0?Number(part.duration):0);
-      players.postMessage(playerID,"play-media",{urls,title,playlistFile,token:connection.token,sessionID,duration:chosen.choice.duration,partDurations,resume,tracks,markers:Media.markers(item)});
+      players.postMessage(playerID,"play-media",{urls,title,token:connection.token,sessionID,duration:chosen.choice.duration,partDurations,resume,tracks,markers:Media.markers(item)});
       return entry;
     });
   } catch(error){cleanFiles({files});send("opening-ended",{id,serverID:connection.serverID});throw error;}

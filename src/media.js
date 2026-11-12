@@ -12,13 +12,6 @@ function playbackTitle(item) {
   const year = /^\d{4}$/.test(String(item.year)) ? " (" + item.year + ")" : "";
   return (title || "Plex video") + year;
 }
-function playbackPlaylist(urls, title, startIndex) {
-  const label = String(title || "Plex video").replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim();
-  return "#EXTM3U\n" + urls.slice(startIndex).map((url,index) => {
-    const part = urls.length > 1 ? " · Part " + (startIndex + index + 1) + " of " + urls.length : "";
-    return "#EXTINF:-1," + label + part + "\n" + url + "\n";
-  }).join("");
-}
 function versions(item) {
   return (item.Media || []).map((media, index) => ({ id: String(media.id == null ? index : media.id), index,
     title: [item.editionTitle, media.videoResolution ? String(media.videoResolution).toLowerCase()==="4k"?"4K":media.videoResolution+"p" : "", media.videoCodec, media.audioCodec, media.bitrate ? Math.round(media.bitrate / 1000) + " Mbps" : ""].filter(Boolean).join(" · ") || "Original file " + (index + 1),
@@ -72,4 +65,4 @@ function xmlAttributes(text, name) {
   }
   return result;
 }
-module.exports = { playbackTitle, playbackPlaylist, versions, chooseVersion, streams, selectTracks, markers, xmlAttributes };
+module.exports = { playbackTitle, versions, chooseVersion, streams, selectTracks, markers, xmlAttributes };

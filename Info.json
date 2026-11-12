@@ -9,7 +9,8 @@
   "entry": "src/main.js",
   "globalEntry": "src/global.js",
   "permissions": [
-    "network-request"
+    "network-request",
+    "file-system"
   ],
   "allowedDomains": [
     "*"

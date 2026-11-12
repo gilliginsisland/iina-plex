@@ -63,6 +63,9 @@ or select a movie or TV library. Open a show and season to browse its episodes.
 The IINA player shows the Plex movie title or the show, season/episode number,
 and episode title. Videos split into multiple files also show the part number.
 
+IINA requires the plugin's **file-system** permission to set a custom media title
+through mpv. Approve that permission when prompted during installation or update.
+
 The details panel lets you choose a media version, audio track, and subtitles.
 You can also change tracks through IINA's normal playback menus.
 

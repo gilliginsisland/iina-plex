@@ -1,5 +1,4 @@
 // Tracks only the approved media-part URLs in one managed Plex player.
-const Media = require("./media.js");
 module.exports = function playbackTracker(api, onState = () => {}) {
   let media = null, active = false, index = -1, partTime = 0, partDuration = 0;
   let lastSent = 0, state = "playing", tracking = true, loaded = false;
@@ -93,11 +92,9 @@ module.exports = function playbackTracker(api, onState = () => {}) {
     const path = currentPath();
     const allowed = media && media.urls.indexOf(path) !== -1;
     api.mpv.set("http-header-fields", allowed ? "X-Plex-Token: " + media.token : "");
-    // Opening a local M3U gives mpv the Plex titles without requiring force-media-title.
-    // The playlist is only a container; tracking begins when an approved media URL loads.
-    if (media && media.playlistFile && path && path.split("/").pop() === media.playlistFile.split("/").pop()) {
-      api.mpv.set("start", "0");return;
-    }
+    const part = allowed ? media.urls.indexOf(path) : -1;
+    const title = allowed ? String(media.title || "") : "";
+    api.mpv.set("force-media-title", title && media.urls.length > 1 ? title + " · Part " + (part + 1) + " of " + media.urls.length : title);
     // Reset for every later part or unrelated file so the initial offset cannot carry over.
     const resume = allowed && !resumeConsumed && media.resume && media.urls.indexOf(path) === media.resume.index ? media.resume.position : 0;
     api.mpv.set("start", String(Math.max(0, resume || 0) / 1000));
@@ -160,12 +157,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
       resumePending = null; resumeConsumed = false; lastSent = 0; durations.length = 0;
       (data.partDurations || []).forEach((duration,i) => durations[i] = duration);
       const startIndex = data.resume ? data.resume.index : 0;
-      if (data.playlistFile) {
-        api.file.write(data.playlistFile, Media.playbackPlaylist(data.urls, data.title, startIndex));
-        api.core.open(data.playlistFile);
-      } else {
-        api.core.open(data.urls[startIndex]);data.urls.slice(startIndex + 1).forEach(url => api.playlist.add(url));
-      }
+      api.core.open(data.urls[startIndex]);data.urls.slice(startIndex + 1).forEach(url => api.playlist.add(url));
     },
     disable() { tracking = false; },
     sessionID() { return media&&media.sessionID; },
