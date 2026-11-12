@@ -517,7 +517,8 @@ async function launch(connection, id, options = {}, target = {}) {
       const selectedTracks = index === resume.index ? initial : Media.selectTracks(parts[index], {},
         Object.assign({}, preferred, {
           audioLanguage:initial.audio && initial.audio.language || preferred.audioLanguage,
-          subtitleLanguage:initial.subtitle && initial.subtitle.language || preferred.subtitleLanguage
+          subtitleLanguage:initial.subtitle && initial.subtitle.language || preferred.subtitleLanguage,
+          subtitleMode:options.subtitleId === "none" ? "off" : options.subtitleId ? "auto" : preferred.subtitleMode
         }));
       if (selectedTracks.subtitle && selectedTracks.subtitle.external) {
         selectedTracks.externalFile = await subtitleFile(connection, selectedTracks.subtitle, sessionID, files);

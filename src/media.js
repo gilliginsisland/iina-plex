@@ -26,7 +26,7 @@ function chooseVersion(item, id) {
 function streams(part) {
   return (part.Stream || []).filter(stream => [2,3].includes(Number(stream.streamType))&&/^\d+$/.test(String(stream.id))).map(stream => ({
     id: P.id(stream.id), type: Number(stream.streamType), index: stream.index != null && String(stream.index).trim() !== "" && Number.isInteger(Number(stream.index)) && Number(stream.index) >= 0 ? Number(stream.index) : null,
-    title: stream.displayTitle || stream.extendedDisplayTitle || [stream.language || "Unknown language", stream.codec, stream.forced ? "Forced" : "", stream.default ? "Default" : ""].filter(Boolean).join(" · "),
+    title: stream.displayTitle || stream.extendedDisplayTitle || [stream.language || "Unknown language", stream.codec, P.flag(stream.forced) ? "Forced" : "", P.flag(stream.default) ? "Default" : ""].filter(Boolean).join(" · "),
     language: stream.languageCode || stream.languageTag || "", codec: String(stream.codec || "").toLowerCase(),
     selected: P.flag(stream.selected), forced: P.flag(stream.forced), external: !!stream.key
   }));
@@ -45,7 +45,7 @@ function selectTracks(part, options, preferences) {
   let selectedSub;
   if (options.subtitleId === "none" || (!options.subtitleId && preferences.subtitleMode === "off")) selectedSub = null;
   else if (options.subtitleId) selectedSub = subs.find(s=>s.id===options.subtitleId);
-  else if (preferences.subtitleMode === "forced") selectedSub = pick(subs.filter(s=>s.forced), "", preferences.subtitleLanguage);
+  else if (preferences.subtitleMode === "forced") selectedSub = pick(subs.filter(s=>s.forced), "", preferences.subtitleLanguage) || null;
   else selectedSub = subs.find(s=>matches(s,preferences.subtitleLanguage)) || subs.find(s=>s.selected) || subs.find(s=>s.forced);
   return { audio: selectedAudio || null, subtitle: selectedSub || null, subtitleOff: selectedSub === null };
 }
