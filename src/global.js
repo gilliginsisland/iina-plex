@@ -56,6 +56,7 @@ players.onMessage("playback-started", (data,sender)=>{
   const entry=entryFor(data,sender); if (!entry) return;
   entry.started=true;entry.state="playing";publishPlayers(); send("opening-ended", {id:entry.id,serverID:entry.connection.serverID});
   send("playing", {title:entry.title,id:entry.id,serverID:entry.connection.serverID,playerID:entry.playerID});
+  if(entry.hideLibrary){entry.hideLibrary=false;hideBrowser();}
 });
 players.onMessage("playback-error", (data,sender)=>{
   const entry=entryFor(data,sender);if(!entry)return;
@@ -72,7 +73,7 @@ players.onMessage("playback-complete", (data,sender)=>{
   const entry=entryFor(data,sender);if(!entry||queuePlayer!==entry.playerID||!queue.length||!settings().autoNext)return;
   entry.completed=true;cancelNext();const revision=queueRevision;
   send("up-next", {title:queue[0].title,seconds:5});
-  nextTimer=setTimeout(()=>{nextTimer=null;if(revision===queueRevision&&queuePlayer===entry.playerID)advanceQueue(entry.playerID).catch(error=>send("notice",{message:error.message}));},5000);
+  nextTimer=setTimeout(()=>{nextTimer=null;if(revision===queueRevision&&queuePlayer===entry.playerID)advanceQueue(entry.playerID,0,false).catch(error=>send("notice",{message:error.message}));},5000);
 });
 players.onMessage("player-state",(data,sender)=>{
   const entry=entryFor(data,sender);if(!entry)return;
@@ -109,6 +110,7 @@ window.loadFile("ui/browser.html");
 window.setProperty({ title: "Plex Library", resizable: true });
 window.setFrame(1180, 800);
 function openBrowser() { window.open(); }
+function hideBrowser() { setTimeout(()=>window.close(),0); }
 iina.menu.addItem(iina.menu.item("Browse Plex Library…", openBrowser));
 guarded("ready", async () => {
   send("preferences",settings());
@@ -367,14 +369,14 @@ async function subtitleFile(connection,stream,sessionID,files) {
 function onMainThread(callback) {
   return new Promise((resolve,reject)=>setTimeout(()=>{try{resolve(callback());}catch(error){reject(error);}},0));
 }
-async function launch(connection,id,options={},reusePlayer=null) {
+async function launch(connection,id,options={},reusePlayer=null,hideLibrary=true) {
   if(connection.scope!==scope())throw new Error("This selection belongs to a previous profile. Refresh the library.");
   id=P.id(id);const key=connection.scope+":"+connection.serverID+":"+id;
   if(opening.has(key))return null;
   const existing=livePlayers.get(key);
   if(existing&&existing.playerID!==reusePlayer){
     if(options.restart||existing.state==="stopped")reusePlayer=existing.playerID;
-    else { players.postMessage(existing.playerID,"activate-player",{}); send("playing",{title:existing.title,existing:true,id,serverID:connection.serverID});return existing; }
+    else { players.postMessage(existing.playerID,"activate-player",{}); send("playing",{title:existing.title,existing:true,id,serverID:connection.serverID});if(hideLibrary&&existing.started)hideBrowser();return existing; }
   }
   opening.add(key);send("opening",{id,serverID:connection.serverID});
   const files=[];
@@ -400,7 +402,7 @@ async function launch(connection,id,options={},reusePlayer=null) {
     return await onMainThread(()=>{
       if(connection.scope!==scope()){cleanFiles({files});return null;}
       const playerID=reusePlayer==null?players.createPlayerInstance({label:"plex-playback",enablePlugins:false}):reusePlayer;
-      const entry={key,id,connection,playerID,sessionID,title,files,started:false,options};
+      const entry={key,id,connection,playerID,sessionID,title,files,started:false,options,hideLibrary};
       // Keep old sync records until their final acknowledgement; registry ownership moves to this item.
       for(const [oldKey,old]of livePlayers)if(old.playerID===playerID){livePlayers.delete(oldKey);setTimeout(()=>cleanFiles(old),30000);}
       livePlayers.set(key,entry);publishPlayers();sync.bind(playerID,sessionID,connection,id,serverBaseline);
@@ -440,13 +442,13 @@ function defaultQueuePlayer() {
   const entries=Array.from(livePlayers.values()).filter(entry=>entry.connection.scope===scope());
   return entries.length?entries[entries.length-1].playerID:null;
 }
-async function advanceQueue(playerID=queuePlayer,index=0) {
+async function advanceQueue(playerID=queuePlayer,index=0,hideLibrary=true) {
   if(queueBusy||!queue[index])return;
   const record=queue[index];if(record.connection.scope!==scope())throw new Error("Queue belongs to a different profile.");
   if(playerID!=null&&!Array.from(livePlayers.values()).some(entry=>entry.playerID===playerID))playerID=null;
   queueBusy=true;cancelNext();publishQueue();
   try{
-    const entry=await launch(record.connection,record.id,record.options,playerID);
+    const entry=await launch(record.connection,record.id,record.options,playerID,hideLibrary);
     if(!entry)return;
     if(playerID!=null&&entry.playerID!==playerID)players.postMessage(playerID,"player-control",{action:"stop"});
     const position=queue.indexOf(record);if(position>=0)queue.splice(position,1);
@@ -502,6 +504,7 @@ guarded("player-control",async data=>{
   if(!entry)throw new Error("This player is no longer available.");
   if(data.action==="next"){await advanceQueue(playerID);return;}
   if(["skip-intro","skip-credits","stop","activate"].includes(data.action))players.postMessage(playerID,"player-control",{action:data.action});
+  if(data.action==="activate")hideBrowser();
   if(data.action==="stop"){
     if(queuePlayer===playerID)cancelNext();entry.state="stopped";
     send("opening-ended",{id:entry.id,serverID:entry.connection.serverID});publishPlayers();

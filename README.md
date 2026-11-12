@@ -51,7 +51,8 @@ saved. If that authorization expires or is revoked, select the profile again.
 Use **Continue Watching**, **Up Next**, or **Recently Added** in the sidebar,
 or select a movie or TV library. Open a show and season to browse its episodes.
 
-- Click a **poster** to play or resume a movie or episode.
+- Click a **poster** to play or resume a movie or episode. The library window
+  hides when playback starts; reopen it from **Browse Plex Library…** to keep browsing.
 - Click its **title** to see details and playback choices.
 - Choose **Resume** to continue from the saved position, or **Play from beginning**
   to start over.
