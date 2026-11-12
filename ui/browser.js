@@ -380,6 +380,9 @@ class PlexMediaDetails extends PlexElement {
     this.loading=false;
   }
   copyFrom(item) {
+    if(this.ratingKey!==item.ratingKey){
+      for(const name of ["version","audio","subtitle"])this.part(name).replaceChildren();
+    }
     this.batch(() => { for (const key of Object.keys(mediaProperties)) this[key] = item[key]; });
   }
   render() {
@@ -498,6 +501,7 @@ class PlexBrowser extends PlexElement {
     for(const id of ["audio-language","subtitle-language","subtitle-mode","auto-next","include-specials"])bind(id,"change",()=>this.post("preferences",{audioLanguage:this.view("audio-language").value,subtitleLanguage:this.view("subtitle-language").value,subtitleMode:this.view("subtitle-mode").value,autoNext:this.view("auto-next").checked,includeSpecials:this.view("include-specials").checked}));
     bind("choose-profile","click",()=>{this._chooseProfileRequested=true;this.post("home-users");});
     bind("profile-close","click",()=>this.view("profile-dialog").close());
+    bind("profile-dialog","close",()=>this.view("profile-pin").value="");
     bind("profile-form","submit",event=>{event.preventDefault();const pin=this.view("profile-pin").value;this.view("profile-pin").value="";this.view("profile-switch").disabled=true;this.post("switch-profile",{id:this.view("profile-select").value,pin});});
     this.listen(document,"keydown",event=>{const editing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)||document.activeElement.isContentEditable;if((!editing&&((event.altKey&&event.key==="ArrowLeft")||event.key==="Backspace"))||(event.metaKey&&event.key==="[")){if(!this.view("details").open&&!this.view("profile-dialog").open){event.preventDefault();this.back();}}});
     this.listen(window,"focus",()=>{if(this.signedIn&&!this.busy&&!this.view("details").open&&Date.now()-(this._lastRefresh||0)>30000)this.refreshView();});
@@ -593,9 +597,16 @@ class PlexBrowser extends PlexElement {
     on("sync-recovered",()=>{if(this.view("notice").hasAttribute("data-sync")){this.view("notice").hidden=true;this.view("notice").removeAttribute("data-sync");}});
     on("reconnected",()=>{this.status("Reconnected to Plex.");this.refreshView();});
     on("failure",data=>{
-      if(data.operation==="browse"&&data.request!=null&&data.request!==this.request)return;
-      if(data.operation==="details"&&data.request!==this.view("details").request)return;
-      this.busy=false;this.view("sign-in").disabled=false;this.view("details").loading=false;this.view("profile-switch").disabled=false;this.status(data.message,true);this.notice(data.message);
+      const operation=data.operation,details=this.view("details");
+      if(operation==="browse"&&data.request!=null&&data.request!==this.request)return;
+      if(operation==="details"){
+        if(!details.open||data.request!==details.request)return;
+        details.loading=false;
+      }
+      if(["ready","sign-in","discover","connect"].includes(operation))this.busy=false;
+      if(operation==="sign-in")this.view("sign-in").disabled=false;
+      if(operation==="switch-profile")this.view("profile-switch").disabled=false;
+      this.status(data.message,true);this.notice(data.message);
     });
     on("opening",data=>{if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(data.id);if(item){item.opening=true;this.syncDetails(item);}this.status("Opening video…");});
     on("opening-ended",data=>{if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(data.id);if(item){item.opening=false;this.syncDetails(item);}});
