@@ -96,8 +96,14 @@ class PlaybackQueue {
 
   async play(data) {
     if (!this.app.library.selected) throw new Error("Connect to a server first.");
+    if (this.busy) {
+      this.invalidate();
+      this.publish();
+    } else {
+      this.preparation++;
+      this.cancelNext();
+    }
     const generation = this.generation;
-    this.cancelNext();
     const entry = await this.app.players.launch(this.app.library.selected, data.id, data);
     if (entry && this.items.length && generation === this.generation) this.playerID = entry.playerID;
   }

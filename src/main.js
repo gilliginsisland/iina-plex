@@ -18,10 +18,10 @@ class PlexPlayer {
 
   publishState() {
     if (!this.tracker) return;
-    this.intro.enabled = this.tracker.available("intro");
-    this.credits.enabled = this.tracker.available("credits");
     const state = this.tracker.status,
       serialized = JSON.stringify(state);
+    this.intro.enabled = state.canSkipIntro;
+    this.credits.enabled = state.canSkipCredits;
     if (state.sessionID && serialized !== this.lastState) {
       this.lastState = serialized;
       this.api.global.postMessage("player-state", state);

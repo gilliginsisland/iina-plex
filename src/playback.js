@@ -79,11 +79,8 @@ class PlaybackTracker {
     }
     const now = Date.now();
     if (!force && now - this.lastSent < 10000) return;
-    let offset = 0;
-    for (let i = 0; i < this.index; i++) {
-      if (!(this.durations[i] > 0)) return; // Do not guess an offset for skipped, unknown multipart files.
-      offset += this.durations[i];
-    }
+    const offset = this.offset;
+    if (offset === null) return; // Do not guess offsets for skipped, unknown multipart files.
     const duration =
       this.media.urls.length === 1
         ? this.partDuration || this.media.duration
@@ -265,15 +262,11 @@ class PlaybackTracker {
 
   get status() {
     return {
-      sessionID: this.media && this.media.sessionID,
+      sessionID: this.sessionID,
       state: this.failed ? "error" : !this.loaded ? "opening" : !this.active ? "stopped" : this.state,
       canSkipIntro: !!this.marker("intro"),
       canSkipCredits: !!this.marker("credits")
     };
-  }
-
-  available(type) {
-    return !!this.marker(type);
   }
 
   skip(type) {
