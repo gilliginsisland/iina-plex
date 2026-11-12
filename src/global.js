@@ -1,5 +1,6 @@
 const P = require("./plex.js");
 const Media = require("./media.js");
+const RESOURCES_URL = "https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1";
 const { http, standaloneWindow: window, preferences, global: players } = iina;
 let clientID = preferences.get("clientID");
 if (!clientID) {
@@ -15,13 +16,32 @@ const opening = new Set(), livePlayers = new Map();
 let queue = [], queuePlayer = null, nextTimer = null, queueRevision = 0;
 let homeUsers = [], profileID = "owner", profileToken = null, accountID = "", needsProfile = false;
 let browseGeneration = 0, connectionGeneration = 0, queueBusy = false;
+let identifyingAccount = null;
 const artworkCache = new Map();
 function sessionInfo() { return {signedIn:!!token,serverID:preferences.get("lastServer"),libraryID:preferences.get("lastLibrary"),allowHTTP:preferences.get("allowHTTP")===true,profileID,needsProfile}; }
 async function identifyAccount() {
-  if(accountID)return;
-  const user=await request("https://plex.tv/api/v2/user",token);
-  if(user&&/^\d+$/.test(String(user.id))){accountID=String(user.id);preferences.set("accountID",accountID);preferences.sync();}
-  else throw new Error("Plex did not return an account identity. Sign in again.");
+  if (accountID) return;
+  const currentSession = session, accessToken = token;
+  if (identifyingAccount && identifyingAccount.session === currentSession && identifyingAccount.token === accessToken) {
+    return identifyingAccount.promise;
+  }
+  const pending = {session:currentSession,token:accessToken};
+  pending.promise = (async () => {
+    const user = await request("https://plex.tv/api/v2/user", accessToken);
+    if (currentSession !== session || accessToken !== token) throw new Error("Plex account changed. Try again.");
+    if (!user || !/^\d+$/.test(String(user.id))) throw new Error("Plex did not return an account identity. Sign in again.");
+    accountID = String(user.id);
+    preferences.set("accountID", accountID);
+    preferences.sync();
+  })();
+  identifyingAccount = pending;
+  try { await pending.promise; }
+  finally { if (identifyingAccount === pending) identifyingAccount = null; }
+}
+async function resourcesFor(accessToken) {
+  const resources = await request(RESOURCES_URL, accessToken);
+  if (!Array.isArray(resources)) throw new Error("Plex did not return a valid server list. Try again.");
+  return resources;
 }
 function scope() { return accountID + ":" + profileID; }
 function settings() { return { audioLanguage: preferences.get("audioLanguage") || "", subtitleLanguage: preferences.get("subtitleLanguage") || "", subtitleMode: preferences.get("subtitleMode") || "auto", autoNext: preferences.get("autoNext") === true, includeSpecials:preferences.get("includeSpecials")===true }; }
@@ -132,9 +152,9 @@ guarded("ready", async () => {
       const saved = token && accountID ? credentials.loadProfile(accountID, remembered) : null;
       if (saved) {
         try {
-          const resources = await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1", saved);
+          await resourcesFor(saved);
           if (currentSession !== session) return;
-          if (Array.isArray(resources)) { profileToken=saved;needsProfile=false; }
+          profileToken=saved;needsProfile=false;
         } catch (error) {
           if (currentSession !== session) return;
           if (error.denied) credentials.clearProfile();
@@ -158,6 +178,7 @@ guarded("sign-in", async () => {
     const result = await request("https://plex.tv/api/v2/pins/" + P.id(pin.id), null);
     if (generation !== authGeneration) return;
     if (result.authToken) {
+      disableSync();session++;selected=null;servers=[];homeUsers=[];artwork={};artworkCache.clear();
       token = result.authToken;profileToken=null;profileID="owner";needsProfile=false;accountID="";
       preferences.set("lastHomeProfile","");
       credentials.clearProfile();
@@ -183,7 +204,7 @@ guarded("discover", async () => {
   if(needsProfile)throw new Error("Choose your Plex Home profile before browsing.");
   const currentSession = session;
   let result;
-  try { await identifyAccount();result = await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1", profileToken||token); }
+  try { await identifyAccount();result = await resourcesFor(profileToken||token); }
   catch (error) {
     if(currentSession===session&&error.denied&&profileToken){
       disableSync();credentials.clearProfile();profileToken=null;needsProfile=true;selected=null;servers=[];session++;
@@ -233,12 +254,14 @@ async function homeRequest(path,method="get") {
 }
 guarded("home-users",async()=>{
   if(!token)return;
+  const currentSession=session;
   try{
     const result=await homeRequest("/api/home/users");
+    if(currentSession!==session)return;
     homeUsers=result.users||result.User||(result.MediaContainer&&result.MediaContainer.User)||[];
     homeUsers=homeUsers.filter(user=>/^\d+$/.test(String(user.id))).map(user=>({id:String(user.id),title:user.title||user.username||"Home user",protected:user.protected===true||String(user.protected)==="1",admin:user.admin===true||String(user.admin)==="1"}));
     send("home-users",{users:homeUsers,selected:profileID,needsSelection:needsProfile});
-  }catch(error){send("home-users",{users:[],selected:profileID,needsSelection:needsProfile});if(needsProfile)throw error;}
+  }catch(error){if(currentSession!==session)return;send("home-users",{users:[],selected:profileID,needsSelection:needsProfile});if(needsProfile)throw error;}
 });
 guarded("switch-profile",async data=>{
   if(!token)throw new Error("Sign in first.");
@@ -247,11 +270,11 @@ guarded("switch-profile",async data=>{
   const user=homeUsers.find(user=>user.id===String(data.id));if(!user)throw new Error("Choose an available Plex Home profile.");
   const pin=String(data.pin||"");if((user.protected&&!/^\d{4}$/.test(pin))||(pin&&!/^\d{4}$/.test(pin)))throw new Error("Enter the profile's four-digit PIN.");
   const result=await homeRequest("/api/home/users/"+P.id(user.id)+"/switch"+(pin?"?"+P.query({pin}):""),"post");
+  if(currentSession!==session)return;
   const current=result.user||result.User||result;
   const switched=current.authenticationToken||current.authToken;
   if(typeof switched!=="string"||!switched)throw new Error("Plex did not authorize this profile.");
-  const resources=await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1",switched);
-  if(!Array.isArray(resources))throw new Error("Plex did not return this profile's servers.");
+  await resourcesFor(switched);
   if(currentSession!==session)return;
   disableSync();session++;selected=null;servers=[];artwork={};artworkCache.clear();
   profileToken=switched;profileID=user.id;needsProfile=false;
@@ -261,17 +284,30 @@ guarded("switch-profile",async data=>{
   send("home-users",{users:homeUsers,selected:profileID,needsSelection:false});
   if(!saved)send("notice",{message:"Profile selected, but Keychain could not save it. You will need to select it again after restarting IINA."});
 });
-guarded("reconnect",async()=>{
-  if(!token)throw new Error("Sign in first.");
-  const old=selected;if(!old){send("notice",{message:"Refresh servers and choose your server again."});return;}
-  const resources=await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1",profileToken||token);
-  const server=resources.find(server=>server.clientIdentifier===old.serverID);
-  if(!server)throw new Error("This server is no longer shared with the selected profile.");
-  for(const connection of P.connections(server,old.allowHTTP)){
-    try{const base=P.origin(connection.uri);await request(base+"/library/sections",server.accessToken);
-      if(old.scope!==scope())return;
-      old.base=base;old.token=server.accessToken;await sync.recover(old);send("reconnected",{});return;
-    }catch(_){}
+guarded("reconnect", async () => {
+  if (!token) throw new Error("Sign in first.");
+  const old = selected;
+  if (!old) {
+    send("notice", {message:"Refresh servers and choose your server again."});
+    return;
+  }
+  const currentSession = session;
+  const isCurrent = () => currentSession === session && selected === old;
+  const resources = await resourcesFor(profileToken || token);
+  if (!isCurrent()) return;
+  const server = resources.find(server => server.clientIdentifier === old.serverID);
+  if (!server) throw new Error("This server is no longer shared with the selected profile.");
+  for (const connection of P.connections(server, old.allowHTTP)) {
+    try {
+      const base = P.origin(connection.uri);
+      await request(base + "/library/sections", server.accessToken);
+      if (!isCurrent()) return;
+      old.base = base;
+      old.token = server.accessToken;
+      await sync.recover(old);
+      if (isCurrent()) send("reconnected", {});
+      return;
+    } catch (_) { if (!isCurrent()) return; }
   }
   throw new Error("Server is unavailable. Check its network connection and try again.");
 });
@@ -335,13 +371,24 @@ guarded("filters",async data=>{
   }
   if(selected===connection)send("filters",Object.assign({library,serverID:connection.serverID},result));
 });
-guarded("watched",async data=>{
-  if(!selected)throw new Error("Connect to a server first.");const connection=selected,id=P.id(data.id);
-  const active=Array.from(livePlayers.values()).some(entry=>entry.connection.scope===connection.scope&&entry.connection.serverID===connection.serverID&&entry.id===id);
-  if(active)throw new Error("Stop this item's IINA player before changing its watched state.");
-  await request(connection.base+"/:/"+(data.watched===true?"scrobble":"unscrobble")+"?"+P.query({key:id,identifier:"com.plexapp.plugins.library"}),connection.token,"put");
-  if(selected!==connection)return;
-  const item=await metadataAt(connection,id);send("item-synced",{serverID:connection.serverID,item:P.listing({Metadata:[item]},0,1).items[0]});
+guarded("watched", async data => {
+  if (!selected) throw new Error("Connect to a server first.");
+  const connection = selected, id = P.id(data.id);
+  const active = () => Array.from(livePlayers.values()).some(entry =>
+    entry.connection.scope === connection.scope && entry.connection.serverID === connection.serverID &&
+    entry.id === id && entry.state !== "stopped");
+  if (active()) throw new Error("Stop this item's IINA player before changing its watched state.");
+  await sync.recover(connection, id);
+  if (selected !== connection) return;
+  if (active()) throw new Error("Stop this item's IINA player before changing its watched state.");
+  if (sync.hasPending(connection, id)) {
+    throw new Error("Wait for the playback position to sync, then try changing its watched state again.");
+  }
+  await request(connection.base + "/:/" + (data.watched === true ? "scrobble" : "unscrobble") + "?" +
+    P.query({key:id,identifier:"com.plexapp.plugins.library"}), connection.token, "put");
+  if (selected !== connection) return;
+  const item = await metadataAt(connection, id);
+  send("item-synced", {serverID:connection.serverID,item:P.listing({Metadata:[item]},0,1).items[0]});
 });
 
 async function metadataAt(connection, id) {
@@ -356,8 +403,10 @@ async function subtitleFile(connection,stream,sessionID,files) {
   if(!ext)throw new Error("This external subtitle format is not supported yet. Select another track.");
   const temp="@tmp/sub-"+sessionID.replace(/[^a-zA-Z0-9-]/g,"")+"-"+stream.id+"."+ext;
   const download=async(path,suffix)=>{
-    await http.download(connection.base+"/library/streams/"+P.id(stream.id)+"."+suffix,path,{headers:headers(connection.token)});
-    files.push(path);const handle=iina.file.handle(path,"read");
+    files.push(path);
+    try { await http.download(connection.base+"/library/streams/"+P.id(stream.id)+"."+suffix,path,{headers:headers(connection.token)}); }
+    catch (_) { throw new Error("The subtitle could not be downloaded. Choose another track or reconnect."); }
+    const handle=iina.file.handle(path,"read");
     try{handle.seekToEnd();if(handle.offset()>16*1024*1024)throw new Error("Subtitle is too large to load.");}finally{handle.close();}
   };
   await download(temp,ext);
@@ -506,7 +555,7 @@ guarded("player-control",async data=>{
   if(["skip-intro","skip-credits","stop","activate"].includes(data.action))players.postMessage(playerID,"player-control",{action:data.action});
   if(data.action==="activate")hideBrowser();
   if(data.action==="stop"){
-    if(queuePlayer===playerID)cancelNext();entry.state="stopped";
+    if(queuePlayer===playerID)cancelNext();entry.state="stopping";
     send("opening-ended",{id:entry.id,serverID:entry.connection.serverID});publishPlayers();
   }
 });
