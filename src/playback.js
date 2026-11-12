@@ -139,7 +139,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
     index = media.urls.indexOf(currentPath());
     if (index < 0) return;
     active = true; loaded = true; ended=false;audioApplied=-1;subtitleApplied=-1; partTime = 0; partDuration = durations[index] || 0;
-    state = api.mpv.getFlag("pause") ? "paused" : "playing";
+    state = api.mpv.getFlag("paused-for-cache") ? "buffering" : api.mpv.getFlag("pause") ? "paused" : "playing";
     resumePending = !resumeConsumed && media.resume && index === media.resume.index && media.resume.position > 0 ? media.resume.position : null;
     resumeConsumed = true; resumeStarted = Date.now();
     sample(); confirmResume();
@@ -156,12 +156,13 @@ module.exports = function playbackTracker(api, onState = () => {}) {
   });
   api.event.on("mpv.pause.changed", paused => {
     if (!active) return;
-    state = paused ? "paused" : "playing"; sample(); report(true, false, false);
+    state = api.mpv.getFlag("paused-for-cache") ? "buffering" : paused ? "paused" : "playing";
+    sample(); report(true, false, false);onState();
   });
   api.event.on("mpv.paused-for-cache.changed", buffering => {
     if (!active) return;
     state = buffering ? "buffering" : api.mpv.getFlag("pause") ? "paused" : "playing";
-    sample(); report(true, false, false);
+    sample(); report(true, false, false);onState();
   });
   api.event.on("mpv.playback-restart", () => {
     if(ended&&!closing&&media&&currentPath()===media.urls[index]){active=true;ended=false;}
