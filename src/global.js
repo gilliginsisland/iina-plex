@@ -67,6 +67,14 @@ class PlexPlugin {
     };
   }
 
+  get session() {
+    return Object.assign({}, this.account.info, {
+      serverID: this.api.preferences.get("lastServer"),
+      libraryID: this.api.preferences.get("lastLibrary"),
+      allowHTTP: this.api.preferences.get("allowHTTP") === true
+    });
+  }
+
   headers(accessToken) {
     const h = {
       Accept: "application/json",
@@ -123,7 +131,7 @@ class PlexPlugin {
     this.send("preferences", this.settings);
     await this.account.restore();
     if (currentSession !== this.account.revision) return;
-    this.send("session", this.account.info);
+    this.send("session", this.session);
     this.queue.publish();
     this.players.publish();
   }

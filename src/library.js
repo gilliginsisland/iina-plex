@@ -269,18 +269,12 @@ class PlexLibrary {
     if (!this.selected) throw new Error("Connect to a server first.");
     const connection = this.selected,
       id = P.id(data.id);
-    const active = () =>
-      Array.from(this.app.players.live.values()).some(
-        (entry) =>
-          entry.connection.scope === connection.scope &&
-          entry.connection.serverID === connection.serverID &&
-          entry.id === id &&
-          entry.state !== "stopped"
-      );
-    if (active()) throw new Error("Stop this item's IINA player before changing its watched state.");
+    if (this.app.players.isActive(connection, id))
+      throw new Error("Stop this item's IINA player before changing its watched state.");
     await this.app.sync.recover(connection, id);
     if (this.selected !== connection) return;
-    if (active()) throw new Error("Stop this item's IINA player before changing its watched state.");
+    if (this.app.players.isActive(connection, id))
+      throw new Error("Stop this item's IINA player before changing its watched state.");
     if (this.app.sync.hasPending(connection, id)) {
       throw new Error("Wait for the playback position to sync, then try changing its watched state again.");
     }

@@ -28,7 +28,6 @@ class PlexPlayers {
   }
 
   registerEvents() {
-    this.app.guarded("play", (data) => this.play(data));
     this.app.guarded("player-control", (data) => this.control(data));
     this.app.api.global.onMessage("playback-progress", (data, sender) => this.progress(data, sender));
     this.app.api.global.onMessage("playback-closed", (data, sender) => this.closed(data, sender));
@@ -46,6 +45,22 @@ class PlexPlayers {
       if (entry.sessionID === data.sessionID && fromPlayer(entry, sender)) return entry;
     }
     return null;
+  }
+
+  find(playerID) {
+    return Array.from(this.live.values()).find(
+      (entry) => entry.playerID === playerID && entry.connection.scope === this.app.account.scope
+    );
+  }
+
+  isActive(connection, id) {
+    return Array.from(this.live.values()).some(
+      (entry) =>
+        entry.connection.scope === connection.scope &&
+        entry.connection.serverID === connection.serverID &&
+        entry.id === id &&
+        entry.state !== "stopped"
+    );
   }
 
   retirePlayer(entry) {
@@ -283,37 +298,31 @@ class PlexPlayers {
     return entries.length ? entries[entries.length - 1].playerID : null;
   }
 
-  async play(data) {
-    if (!this.app.library.selected) throw new Error("Connect to a server first.");
-    const generation = this.app.queue.generation;
-    this.app.queue.cancelNext();
-    const entry = await this.launch(this.app.library.selected, data.id, data);
-    if (entry && this.app.queue.items.length && generation === this.app.queue.generation)
-      this.app.queue.playerID = entry.playerID;
-  }
-
   async control(data) {
     const playerID = Number(data.playerID),
-      entry = Array.from(this.live.values()).find(
-        (entry) => entry.playerID === playerID && entry.connection.scope === this.app.account.scope
-      );
+      entry = this.find(playerID);
     if (!entry) throw new Error("This player is no longer available.");
     if (data.action === "next") {
       await this.app.queue.advance(playerID);
       return;
     }
-    if (["skip-intro", "skip-credits", "stop", "activate"].includes(data.action))
+    if (data.action === "stop") {
+      this.app.queue.interrupt(playerID);
+      this.stop(playerID);
+      return;
+    }
+    if (["skip-intro", "skip-credits", "activate"].includes(data.action))
       this.app.api.global.postMessage(playerID, "player-control", { action: data.action });
     if (data.action === "activate") this.app.hideBrowser();
-    if (data.action === "stop") {
-      if (this.app.queue.playerID === playerID) {
-        this.app.queue.invalidate();
-        this.app.queue.publish();
-      }
-      entry.state = "stopping";
-      this.app.send("opening-ended", { id: entry.id, serverID: entry.connection.serverID });
-      this.publish();
-    }
+  }
+
+  stop(playerID) {
+    const entry = this.find(playerID);
+    if (!entry) return;
+    this.app.api.global.postMessage(playerID, "player-control", { action: "stop" });
+    entry.state = "stopping";
+    this.app.send("opening-ended", { id: entry.id, serverID: entry.connection.serverID });
+    this.publish();
   }
 
   retireAll() {

@@ -14,6 +14,7 @@ class PlaybackQueue {
   }
 
   registerEvents() {
+    this.app.guarded("play", (data) => this.play(data));
     this.app.guarded("queue-add", (data) => this.add(data));
     this.app.guarded("queue-action", (data) => this.act(data));
     this.app.guarded("queue-series", (data) => this.playSeries(data));
@@ -47,9 +48,14 @@ class PlaybackQueue {
   playerStopped(playerID) {
     if (this.playerID !== playerID) return;
     if (this.busy) {
-      this.invalidate();
-      this.publish();
+      this.interrupt(playerID);
     } else this.cancelNext();
+  }
+
+  interrupt(playerID) {
+    if (this.playerID !== playerID) return;
+    this.invalidate();
+    this.publish();
   }
 
   scheduleNext(playerID) {
@@ -88,6 +94,14 @@ class PlaybackQueue {
     this.publish();
   }
 
+  async play(data) {
+    if (!this.app.library.selected) throw new Error("Connect to a server first.");
+    const generation = this.generation;
+    this.cancelNext();
+    const entry = await this.app.players.launch(this.app.library.selected, data.id, data);
+    if (entry && this.items.length && generation === this.generation) this.playerID = entry.playerID;
+  }
+
   async advance(playerID = this.playerID, index = 0, hideLibrary = true) {
     if (this.busy || !this.items[index]) return;
     const record = this.items[index],
@@ -95,11 +109,7 @@ class PlaybackQueue {
     const isCurrent = () => generation === this.generation;
     if (record.connection.scope !== this.app.account.scope)
       throw new Error("Queue belongs to a different profile.");
-    if (
-      playerID != null &&
-      !Array.from(this.app.players.live.values()).some((entry) => entry.playerID === playerID)
-    )
-      playerID = null;
+    if (playerID != null && !this.app.players.find(playerID)) playerID = null;
     this.busy = true;
     this.cancelNext();
     this.publish();
@@ -111,8 +121,7 @@ class PlaybackQueue {
         isCurrent: mayOpen
       });
       if (!entry || !isCurrent()) return;
-      if (playerID != null && entry.playerID !== playerID)
-        this.app.api.global.postMessage(playerID, "player-control", { action: "stop" });
+      if (playerID != null && entry.playerID !== playerID) this.app.players.stop(playerID);
       const position = this.items.indexOf(record);
       if (position >= 0) this.items.splice(position, 1);
       this.playerID = entry.playerID;

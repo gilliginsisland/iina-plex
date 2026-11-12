@@ -31,9 +31,6 @@ class PlexAccount {
   get info() {
     return {
       signedIn: !!this.token,
-      serverID: this.app.api.preferences.get("lastServer"),
-      libraryID: this.app.api.preferences.get("lastLibrary"),
-      allowHTTP: this.app.api.preferences.get("allowHTTP") === true,
       profileID: this.profileID,
       needsProfile: this.needsProfile
     };
@@ -91,7 +88,7 @@ class PlexAccount {
       this.credentials.clearProfile();
       this.profileToken = null;
       this.needsProfile = true;
-      this.app.send("session", this.info);
+      this.app.send("session", this.app.session);
       this.app.send("notice", { message: "Please select your Plex Home profile again." });
     } else {
       this.credentials.clear();
@@ -198,7 +195,7 @@ class PlexAccount {
         this.app.api.preferences.set("lastHomeProfile", "");
         this.credentials.clearProfile();
         const saved = this.credentials.save(this.token);
-        this.app.send("session", this.info);
+        this.app.send("session", this.app.session);
         if (!saved)
           this.app.send("notice", {
             message:
@@ -291,7 +288,7 @@ class PlexAccount {
     this.needsProfile = false;
     this.app.api.preferences.set("lastHomeProfile", this.profileID);
     const saved = this.credentials.saveProfile(this.accountID, this.profileID, switched);
-    this.app.send("session", this.info);
+    this.app.send("session", this.app.session);
     this.app.send("home-users", { users: this.homeUsers, selected: this.profileID, needsSelection: false });
     if (!saved)
       this.app.send("notice", {
