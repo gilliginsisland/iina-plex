@@ -106,7 +106,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
     sample();
     const resumed = confirmResume();
     if (resumePending !== null && Date.now() - resumeStarted >= 30000) {
-      tracking = false; api.core.pause(); api.global.postMessage("resume-failed", {}); return;
+      tracking = false; api.core.pause(); api.global.postMessage("resume-failed", {sessionID:media.sessionID}); return;
     }
     report(resumed, false, false);onState();
   }

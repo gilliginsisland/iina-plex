@@ -12,7 +12,7 @@ const credentials = require("./storage.js")(iina.utils, preferences);
 let restored = false, restoring = null;
 let artwork = {}, artworkSerial = 0;
 let token = null, servers = [], selected = null, authGeneration = 0, session = 0;
-const opening = new Map(), livePlayers = new Map();
+const opening = new Map(), livePlayers = new Map(), retiredPlayers = new Map();
 let queue = [], queuePlayer = null, nextTimer = null, queueRevision = 0, queueGeneration = 0, queuePreparation = 0;
 let homeUsers = [], profileID = "owner", profileToken = null, accountID = "", needsProfile = false;
 let browseGeneration = 0, connectionGeneration = 0, discoveryGeneration = 0, queueBusy = false;
@@ -45,19 +45,37 @@ async function resourcesFor(accessToken) {
 }
 function scope() { return accountID + ":" + profileID; }
 function settings() { return { audioLanguage: preferences.get("audioLanguage") || "", subtitleLanguage: preferences.get("subtitleLanguage") || "", subtitleMode: preferences.get("subtitleMode") || "auto", autoNext: preferences.get("autoNext") === true, includeSpecials:preferences.get("includeSpecials")===true }; }
+function fromPlayer(entry, sender) {
+  return String(sender) === String(entry.playerID) || String(sender) === entry.playerID + "-io.iina.plex-library";
+}
 function entryFor(data, sender) {
-  for (const entry of livePlayers.values()) if (entry.sessionID === data.sessionID && [String(entry.playerID), entry.playerID + "-io.iina.plex-library"].includes(String(sender))) return entry;
+  if (!data || typeof data.sessionID !== "string") return null;
+  for (const entry of livePlayers.values()) {
+    if (entry.sessionID === data.sessionID && fromPlayer(entry, sender)) return entry;
+  }
   return null;
+}
+function retirePlayer(entry) {
+  if (entry.files.length) retiredPlayers.set(entry.sessionID, {playerID:entry.playerID,files:entry.files});
+}
+function releaseRetired(data, sender) {
+  const entry = data && retiredPlayers.get(data.sessionID);
+  if (!entry || !fromPlayer(entry, sender)) return;
+  retiredPlayers.delete(data.sessionID);
+  cleanFiles(entry);
 }
 function cleanFiles(entry) { for (const path of entry.files || []) { try { if (iina.file.exists(path)) iina.file.delete(path); } catch (_) {} } }
 function publishPlayers() { send("players", Array.from(livePlayers.values()).map(entry=>({playerID:entry.playerID,id:entry.id,title:entry.title,serverID:entry.connection.serverID,state:entry.state||"opening",canSkipIntro:!!entry.canSkipIntro,canSkipCredits:!!entry.canSkipCredits}))); }
 function publishQueue() { send("queue", { busy:queueBusy, revision: ++queueRevision, items: queue.map((entry,index)=>({ id:entry.id,title:entry.title,index,serverID:entry.connection.serverID })) }); }
 function cancelNext() { if (nextTimer !== null) clearTimeout(nextTimer); nextTimer = null; send("up-next", null); }
-function resetQueue() {
+function invalidateQueue() {
   queueGeneration++;
   queuePreparation++;
   queueBusy = false;
-  cancelNext();queue = [];queuePlayer = null;publishQueue();
+  cancelNext();
+}
+function resetQueue() {
+  invalidateQueue();queue = [];queuePlayer = null;publishQueue();
 }
 const send = (name, data) => window.postMessage(name, data);
 const sync = require("./sync.js")(http, headers, (name, data) => {
@@ -72,6 +90,7 @@ players.onMessage("playback-progress", (data, sender) => {
 });
 players.onMessage("playback-closed", (data, sender) => {
   sync.close(data, sender);
+  releaseRetired(data, sender);
   const entry = entryFor(data,sender);
   if (!entry) return;
   livePlayers.delete(entry.key); cleanFiles(entry);publishPlayers();
@@ -84,6 +103,7 @@ players.onMessage("playback-started", (data,sender)=>{
   if(entry.hideLibrary){entry.hideLibrary=false;hideBrowser();}
 });
 players.onMessage("playback-error", (data,sender)=>{
+  releaseRetired(data,sender);
   const entry=entryFor(data,sender);if(!entry)return;
   send("opening-ended", {id:entry.id,serverID:entry.connection.serverID});
   send("notice", {message:"IINA could not open “"+entry.title+"”. Check that the media file is available, reconnect, and try again."});
@@ -104,9 +124,16 @@ players.onMessage("player-state",(data,sender)=>{
   const entry=entryFor(data,sender);if(!entry)return;
   entry.state=data.state;entry.canSkipIntro=data.canSkipIntro===true;entry.canSkipCredits=data.canSkipCredits===true;publishPlayers();
 });
-players.onMessage("resume-failed", () => send("notice", { message: "IINA could not reach the saved Plex position. Playback was paused and your saved position was preserved. Try reopening the video." }));
+players.onMessage("resume-failed", (data,sender) => {
+  if(entryFor(data,sender))send("notice", { message: "IINA could not reach the saved Plex position. Playback was paused and your saved position was preserved. Try reopening the video." });
+});
 setInterval(() => sync.retryClosed(), 10000);
-function disableSync() { resetQueue(); livePlayers.clear();publishPlayers(); opening.clear(); sync.clear(); players.postMessage(null, "disable-sync", {}); }
+function disableSync() {
+  resetQueue();
+  for(const entry of livePlayers.values())retirePlayer(entry);
+  livePlayers.clear();publishPlayers();opening.clear();sync.clear();
+  players.postMessage(null,"disable-sync",{});
+}
 function headers(accessToken) {
   const h = { Accept: "application/json", "X-Plex-Product": "IINA Plex Library", "X-Plex-Version": "0.7.5", "X-Plex-Client-Identifier": clientID };
   if (accessToken) h["X-Plex-Token"] = accessToken;
@@ -502,7 +529,7 @@ async function launch(connection, id, options = {}, target = {}) {
       for (const [oldKey, old] of livePlayers) {
         if (old.playerID === playerID) {
           livePlayers.delete(oldKey);
-          setTimeout(() => cleanFiles(old), 30000);
+          retirePlayer(old);
         }
       }
       livePlayers.set(key, entry);
@@ -648,7 +675,8 @@ guarded("player-control",async data=>{
   if(["skip-intro","skip-credits","stop","activate"].includes(data.action))players.postMessage(playerID,"player-control",{action:data.action});
   if(data.action==="activate")hideBrowser();
   if(data.action==="stop"){
-    if(queuePlayer===playerID)cancelNext();entry.state="stopping";
+    if(queuePlayer===playerID){invalidateQueue();publishQueue();}
+    entry.state="stopping";
     send("opening-ended",{id:entry.id,serverID:entry.connection.serverID});publishPlayers();
   }
 });
