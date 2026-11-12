@@ -302,6 +302,9 @@ class PlexMediaList extends PlexElement {
     for (const child of this.children) if (child instanceof PlexMediaItem && child.ratingKey === String(key)) return child;
     return null;
   }
+  findItems(key) {
+    return Array.from(this.children).filter(child => child instanceof PlexMediaItem && child.ratingKey === String(key));
+  }
   render() {
     let count = 0, episodes = true;
     for (const item of this.children) {
@@ -326,14 +329,16 @@ class PlexMediaList extends PlexElement {
   }
   acceptArtwork(data) {
     if (data.request !== this.request || !/^data:image\/(jpeg|png|webp);base64,/.test(data.image || "")) return;
-    const item = this.findItem(data.id);
-    if (item) { item.artwork = data.image; item.setAttribute("artwork-state", "loaded"); }
+    for (const item of this.findItems(data.id)) {
+      item.artwork = data.image; item.setAttribute("artwork-state", "loaded");
+    }
   }
   finishArtwork(data) {
     this._artworkJobs.delete(data.request + ":" + data.id);
     if (data.request === this.request) {
-      const item = this.findItem(data.id);
-      if (item && !item.artwork) item.setAttribute("artwork-state", "missing");
+      for (const item of this.findItems(data.id)) {
+        if (!item.artwork) item.setAttribute("artwork-state", "missing");
+      }
     }
     this.pumpArtwork();
   }
@@ -540,7 +545,7 @@ class PlexBrowser extends PlexElement {
   queueAction(detail){this.post("queue-action",Object.assign({revision:Number(this.view("queue").getAttribute("revision"))},detail));}
   loadDetails(versionId){const details=this.view("details");details.request++;details.loading=true;this.post("details",{id:details.ratingKey,request:details.request,versionId});}
   syncDetails(item){const details=this.view("details");if(details.open&&details.ratingKey===item.ratingKey)details.copyFrom(item);}
-  updateProgress(data,fromServer){if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(fromServer?data.item.id:data.id);if(!item)return;if(fromServer)this.applyMetadata(item,data.item);else item.progress=data.duration>0?Math.min(1,data.time/data.duration):0;this.syncDetails(item);}
+  updateProgress(data,fromServer){if(data.serverID!==this.view("servers").value)return;for(const item of this.view("items").findItems(fromServer?data.item.id:data.id)){if(fromServer)this.applyMetadata(item,data.item);else item.progress=data.duration>0?Math.min(1,data.time/data.duration):0;this.syncDetails(item);}}
   renderPlayer(){const option=this.view("active-player").selectedOptions[0];this.view("now-playing").hidden=!option;if(!option)return;this.view("player-state").textContent=option.dataset.state;this.view("skip-intro").hidden=option.dataset.intro!=="true";this.view("skip-credits").hidden=option.dataset.credits!=="true";this.view("next-player").disabled=!this.view("queue").childElementCount;}
   installBridge(){
     const on=(name,handler)=>iina.onMessage(name,data=>{if(this.isConnected)handler(data);});
@@ -608,8 +613,8 @@ class PlexBrowser extends PlexElement {
       if(operation==="switch-profile")this.view("profile-switch").disabled=false;
       this.status(data.message,true);this.notice(data.message);
     });
-    on("opening",data=>{if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(data.id);if(item){item.opening=true;this.syncDetails(item);}this.status("Opening video…");});
-    on("opening-ended",data=>{if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(data.id);if(item){item.opening=false;this.syncDetails(item);}});
+    on("opening",data=>{if(data.serverID!==this.view("servers").value)return;for(const item of this.view("items").findItems(data.id)){item.opening=true;this.syncDetails(item);}this.status("Opening video…");});
+    on("opening-ended",data=>{if(data.serverID!==this.view("servers").value)return;for(const item of this.view("items").findItems(data.id)){item.opening=false;this.syncDetails(item);}});
     on("playing",data=>this.status((data.existing?"Already open: “":"Playing “")+data.title+"”."));
   }
 }
