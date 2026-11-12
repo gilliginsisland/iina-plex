@@ -42,8 +42,9 @@ Your login is saved in macOS Keychain so you can reconnect after restarting IINA
 If macOS asks for Keychain access, allow it to keep the login available.
 
 For Plex Home accounts, use **Switch profile** to choose a user. Protected
-profiles require their PIN. PINs are not saved, and a remembered profile must be
-selected again after restarting IINA.
+profiles require their PIN when switching. The last selected profile is restored
+after restarting IINA using its saved Keychain authorization; its PIN is never
+saved. If that authorization expires or is revoked, select the profile again.
 
 ## Browse and play
 
@@ -144,12 +145,31 @@ once to enable GitHub update checks.
 ## Account access
 
 Authorization happens through Plex in your browser. Your Plex password is not
-entered into the plugin. The saved account token uses macOS Keychain; profile
-PINs are never saved.
+entered into the plugin. The saved account token and the last selected profile's
+authorization use macOS Keychain; profile PINs are never saved.
 
 Use **Sign out** to clear the saved login and pending progress. Already opened
 players can continue playback. To revoke access completely, remove
 **IINA Plex Library** from your Plex account's authorized devices.
+
+## Stored settings
+
+IINA saves the selected profile ID, server/library choices, playback preferences,
+and pending progress in this file:
+
+```text
+~/Library/Application Support/com.colliderli.iina/plugins/.preferences/io.iina.plex-library.plist
+```
+
+This is an ordinary preferences file, not an encrypted credential store. Account
+and profile authorization tokens are stored separately in macOS Keychain. In
+Keychain Access, look for `io.iina.plex-library - Plex account` and
+`io.iina.plex-library - Plex Home profile`. Neither the preferences file nor
+Keychain stores your profile PIN.
+
+Plugin updates preserve these settings because they are stored outside the
+installed plugin folder. Downloaded artwork and subtitles use temporary files;
+artwork caching is in memory.
 
 ## Report a problem
 

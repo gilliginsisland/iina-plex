@@ -112,7 +112,34 @@ function openBrowser() { window.open(); }
 iina.menu.addItem(iina.menu.item("Browse Plex Library…", openBrowser));
 guarded("ready", async () => {
   send("preferences",settings());
-  if (!restored) { token = credentials.load(); restored = true;needsProfile=!!preferences.get("lastHomeProfile"); }
+  if (!restored) {
+    token = credentials.load();restored = true;
+    const remembered = String(preferences.get("lastHomeProfile") || "");
+    needsProfile = !!remembered;
+    if (token && remembered) {
+      profileID = remembered;
+      const currentSession = session;
+      try { await identifyAccount(); }
+      catch (error) {
+        if (currentSession !== session) return;
+        if (error.denied) {
+          credentials.clear();token=null;accountID="";profileID="owner";needsProfile=false;
+        }
+      }
+      if (currentSession !== session) return;
+      const saved = token && accountID ? credentials.loadProfile(accountID, remembered) : null;
+      if (saved) {
+        try {
+          const resources = await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1", saved);
+          if (currentSession !== session) return;
+          if (Array.isArray(resources)) { profileToken=saved;needsProfile=false; }
+        } catch (error) {
+          if (currentSession !== session) return;
+          if (error.denied) credentials.clearProfile();
+        }
+      }
+    }
+  }
   send("session", sessionInfo());publishQueue();publishPlayers();
 });
 guarded("sign-in", async () => {
@@ -131,6 +158,7 @@ guarded("sign-in", async () => {
     if (result.authToken) {
       token = result.authToken;profileToken=null;profileID="owner";needsProfile=false;accountID="";
       preferences.set("lastHomeProfile","");
+      credentials.clearProfile();
       const saved = credentials.save(token);
       send("session", sessionInfo());
       if (!saved) send("notice", { message: "Signed in, but Keychain could not save your login. Allow IINA access to Keychain and sign in again to remember this account." });
@@ -156,7 +184,7 @@ guarded("discover", async () => {
   try { await identifyAccount();result = await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1", profileToken||token); }
   catch (error) {
     if(currentSession===session&&error.denied&&profileToken){
-      disableSync();profileToken=null;needsProfile=true;selected=null;servers=[];session++;
+      disableSync();credentials.clearProfile();profileToken=null;needsProfile=true;selected=null;servers=[];session++;
       send("session",sessionInfo());send("notice",{message:"Please select your Plex Home profile again."});return;
     }
     if (currentSession === session && error.denied) {
@@ -212,6 +240,8 @@ guarded("home-users",async()=>{
 });
 guarded("switch-profile",async data=>{
   if(!token)throw new Error("Sign in first.");
+  const currentSession=session;
+  await identifyAccount();if(currentSession!==session)return;
   const user=homeUsers.find(user=>user.id===String(data.id));if(!user)throw new Error("Choose an available Plex Home profile.");
   const pin=String(data.pin||"");if((user.protected&&!/^\d{4}$/.test(pin))||(pin&&!/^\d{4}$/.test(pin)))throw new Error("Enter the profile's four-digit PIN.");
   const result=await homeRequest("/api/home/users/"+P.id(user.id)+"/switch"+(pin?"?"+P.query({pin}):""),"post");
@@ -220,10 +250,14 @@ guarded("switch-profile",async data=>{
   if(typeof switched!=="string"||!switched)throw new Error("Plex did not authorize this profile.");
   const resources=await request("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1&includeIPv6=1",switched);
   if(!Array.isArray(resources))throw new Error("Plex did not return this profile's servers.");
+  if(currentSession!==session)return;
   disableSync();session++;selected=null;servers=[];artwork={};artworkCache.clear();
   profileToken=switched;profileID=user.id;needsProfile=false;
-  preferences.set("lastHomeProfile",profileID);preferences.sync();send("session",sessionInfo());
+  preferences.set("lastHomeProfile",profileID);
+  const saved=credentials.saveProfile(accountID,profileID,switched);
+  send("session",sessionInfo());
   send("home-users",{users:homeUsers,selected:profileID,needsSelection:false});
+  if(!saved)send("notice",{message:"Profile selected, but Keychain could not save it. You will need to select it again after restarting IINA."});
 });
 guarded("reconnect",async()=>{
   if(!token)throw new Error("Sign in first.");
