@@ -9,13 +9,13 @@ if (!clientID) {
   preferences.sync();
 }
 const credentials = require("./storage.js")(iina.utils, preferences);
-let restored = false;
+let restored = false, restoring = null;
 let artwork = {}, artworkSerial = 0;
 let token = null, servers = [], selected = null, authGeneration = 0, session = 0;
 const opening = new Map(), livePlayers = new Map();
 let queue = [], queuePlayer = null, nextTimer = null, queueRevision = 0, queueGeneration = 0, queuePreparation = 0;
 let homeUsers = [], profileID = "owner", profileToken = null, accountID = "", needsProfile = false;
-let browseGeneration = 0, connectionGeneration = 0, queueBusy = false;
+let browseGeneration = 0, connectionGeneration = 0, discoveryGeneration = 0, queueBusy = false;
 let identifyingAccount = null;
 const artworkCache = new Map();
 function sessionInfo() { return {signedIn:!!token,serverID:preferences.get("lastServer"),libraryID:preferences.get("lastLibrary"),allowHTTP:preferences.get("allowHTTP")===true,profileID,needsProfile}; }
@@ -140,36 +140,48 @@ function hideBrowser() {
   setTimeout(()=>{if(currentSession===session)window.close();},0);
 }
 iina.menu.addItem(iina.menu.item("Browse Plex Library…", openBrowser));
-guarded("ready", async () => {
-  send("preferences",settings());
-  if (!restored) {
-    token = credentials.load();restored = true;
-    const remembered = String(preferences.get("lastHomeProfile") || "");
+async function restoreLogin() {
+  if (restored) return;
+  if (restoring) return restoring;
+  const currentSession = session;
+  const pending = (async () => {
+    token = credentials.load();
+    const previous = String(preferences.get("lastHomeProfile") || "");
+    const remembered = /^\d+$/.test(previous) ? previous : "";
     needsProfile = !!remembered;
-    if (token && remembered) {
-      profileID = remembered;
-      const currentSession = session;
-      try { await identifyAccount(); }
-      catch (error) {
-        if (currentSession !== session) return;
-        if (error.denied) {
-          credentials.clear();token=null;accountID="";profileID="owner";needsProfile=false;
-        }
-      }
+    if (!token || !remembered) return;
+    profileID = remembered;
+    try { await identifyAccount(); }
+    catch (error) {
       if (currentSession !== session) return;
-      const saved = token && accountID ? credentials.loadProfile(accountID, remembered) : null;
-      if (saved) {
-        try {
-          await resourcesFor(saved);
-          if (currentSession !== session) return;
-          profileToken=saved;needsProfile=false;
-        } catch (error) {
-          if (currentSession !== session) return;
-          if (error.denied) credentials.clearProfile();
-        }
+      if (error.denied) {
+        credentials.clear();token=null;accountID="";profileID="owner";needsProfile=false;
       }
     }
+    if (currentSession !== session) return;
+    const saved = token && accountID ? credentials.loadProfile(accountID, remembered) : null;
+    if (!saved) return;
+    try {
+      await resourcesFor(saved);
+      if (currentSession !== session) return;
+      profileToken=saved;needsProfile=false;
+    } catch (error) {
+      if (currentSession !== session) return;
+      if (error.denied) credentials.clearProfile();
+    }
+  })();
+  restoring = pending;
+  try { await pending; }
+  finally {
+    if (currentSession === session) restored = true;
+    if (restoring === pending) restoring = null;
   }
+}
+guarded("ready", async () => {
+  const currentSession = session;
+  send("preferences", settings());
+  await restoreLogin();
+  if (currentSession !== session) return;
   send("session", sessionInfo());publishQueue();publishPlayers();
 });
 guarded("sign-in", async () => {
@@ -187,6 +199,7 @@ guarded("sign-in", async () => {
     if (generation !== authGeneration) return;
     if (result.authToken) {
       disableSync();session++;selected=null;servers=[];homeUsers=[];artwork={};artworkCache.clear();
+      restored=true;
       token = result.authToken;profileToken=null;profileID="owner";needsProfile=false;accountID="";
       preferences.set("lastHomeProfile","");
       credentials.clearProfile();
@@ -199,6 +212,7 @@ guarded("sign-in", async () => {
   if (generation === authGeneration) throw new Error("Plex sign-in expired. Please try again.");
 });
 guarded("sign-out", async () => {
+  restored=true;
   authGeneration++; session++; token = null; profileToken=null;profileID="owner";homeUsers=[];needsProfile=false;accountID="";servers = []; selected = null; artwork = {};artworkCache.clear();
   preferences.set("lastHomeProfile","");preferences.sync();
   disableSync();
@@ -210,10 +224,11 @@ guarded("sign-out", async () => {
 guarded("discover", async () => {
   if (!token) throw new Error("Sign in to Plex first.");
   if(needsProfile)throw new Error("Choose your Plex Home profile before browsing.");
-  const currentSession = session;
+  const currentSession = session, generation = ++discoveryGeneration;
   let result;
   try { await identifyAccount();result = await resourcesFor(profileToken||token); }
   catch (error) {
+    if(currentSession!==session||generation!==discoveryGeneration)return;
     if(currentSession===session&&error.denied&&profileToken){
       disableSync();credentials.clearProfile();profileToken=null;needsProfile=true;selected=null;servers=[];session++;
       send("session",sessionInfo());send("notice",{message:"Please select your Plex Home profile again."});return;
@@ -226,7 +241,7 @@ guarded("discover", async () => {
     }
     throw error;
   }
-  if (currentSession !== session) return;
+  if (currentSession !== session || generation !== discoveryGeneration) return;
   servers = result.filter(s => (s.provides || "").split(",").indexOf("server") !== -1 && s.accessToken);
   send("servers", servers.map(s => ({ id: s.clientIdentifier, name: s.name, owned: P.flag(s.owned) })));
 });
