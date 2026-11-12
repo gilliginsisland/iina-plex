@@ -94,7 +94,7 @@ players.onMessage("playback-closed", (data, sender) => {
   const entry = entryFor(data,sender);
   if (!entry) return;
   livePlayers.delete(entry.key); cleanFiles(entry);publishPlayers();
-  if (queuePlayer === entry.playerID) { queuePlayer = null; cancelNext(); }
+  if (queuePlayer === entry.playerID) { queuePlayer = null; invalidateQueue();publishQueue(); }
 });
 players.onMessage("playback-started", (data,sender)=>{
   const entry=entryFor(data,sender); if (!entry) return;
@@ -107,11 +107,16 @@ players.onMessage("playback-error", (data,sender)=>{
   const entry=entryFor(data,sender);if(!entry)return;
   send("opening-ended", {id:entry.id,serverID:entry.connection.serverID});
   send("notice", {message:"IINA could not open “"+entry.title+"”. Check that the media file is available, reconnect, and try again."});
-  livePlayers.delete(entry.key);cleanFiles(entry);sync.close(data,sender);cancelNext();publishPlayers();
+  livePlayers.delete(entry.key);cleanFiles(entry);sync.close(data,sender);
+  if(queuePlayer===entry.playerID){queuePlayer=null;invalidateQueue();publishQueue();}
+  publishPlayers();
 });
 players.onMessage("playback-stopped",(data,sender)=>{
   const entry=entryFor(data,sender);if(!entry)return;
-  entry.state="stopped";if(queuePlayer===entry.playerID)cancelNext();
+  entry.state="stopped";
+  if(queuePlayer===entry.playerID){
+    if(queueBusy){invalidateQueue();publishQueue();}else cancelNext();
+  }
   send("opening-ended",{id:entry.id,serverID:entry.connection.serverID});publishPlayers();
 });
 players.onMessage("playback-complete", (data,sender)=>{
