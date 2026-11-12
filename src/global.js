@@ -14,7 +14,7 @@ class PlexPlugin {
       api.preferences.set("clientID", this.clientID);
       api.preferences.sync();
     }
-    this.plex = new PlexAPI(api.http, { clientID: this.clientID, version: "0.7.6" });
+    this.plex = new PlexAPI(api.http, { clientID: this.clientID, version: "0.7.7" });
     this.account = new PlexAccount(this);
     this.library = new PlexLibrary(this);
     this.players = new PlexPlayers(this);

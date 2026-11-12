@@ -1,7 +1,7 @@
 {
   "name": "Plex Library",
   "identifier": "io.iina.plex-library",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "author": {
     "name": "iina-plex contributors"
   },
@@ -16,5 +16,5 @@
     "*"
   ],
   "ghRepo": "gilliginsisland/iina-plex",
-  "ghVersion": 2
+  "ghVersion": 3
 }
