@@ -288,7 +288,7 @@ guarded("connect", async data => {
       if(currentSession!==session||generation!==connectionGeneration)return;
       send("libraries", (result.MediaContainer.Directory || []).filter(s => ["movie", "show"].indexOf(s.type) !== -1).map(s => ({ id: P.id(s.key), title: s.title, type: s.type })));
       return;
-    } catch (_) { if (currentSession !== session) return; }
+    } catch (_) { if (currentSession !== session || generation !== connectionGeneration) return; }
   }
   throw new Error("No reachable server connection. Check the server or enable local HTTP if your server requires it.");
 });
@@ -341,9 +341,11 @@ guarded("reconnect", async () => {
     send("notice", {message:"Refresh servers and choose your server again."});
     return;
   }
-  const currentSession = session;
-  const isCurrent = () => currentSession === session && selected === old;
-  const resources = await resourcesFor(profileToken || token);
+  const currentSession = session, generation = ++connectionGeneration;
+  const isCurrent = () => currentSession === session && generation === connectionGeneration && selected === old;
+  let resources;
+  try { resources = await resourcesFor(profileToken || token); }
+  catch (error) { if (isCurrent()) throw error; return; }
   if (!isCurrent()) return;
   const server = resources.find(server => server.clientIdentifier === old.serverID);
   if (!server) throw new Error("This server is no longer shared with the selected profile.");
@@ -438,6 +440,7 @@ guarded("watched", async data => {
     P.query({key:id,identifier:"com.plexapp.plugins.library"}), connection.token, "put");
   if (selected !== connection) return;
   const item = await metadataAt(connection, id);
+  if (selected !== connection) return;
   send("item-synced", {serverID:connection.serverID,item:P.listing({Metadata:[item]},0,1).items[0]});
 });
 
