@@ -25,10 +25,10 @@ function chooseVersion(item, id) {
 }
 function streams(part) {
   return (part.Stream || []).filter(stream => [2,3].includes(Number(stream.streamType))&&/^\d+$/.test(String(stream.id))).map(stream => ({
-    id: P.id(stream.id), type: Number(stream.streamType), index: Number.isInteger(Number(stream.index)) ? Number(stream.index) : null,
+    id: P.id(stream.id), type: Number(stream.streamType), index: stream.index != null && String(stream.index).trim() !== "" && Number.isInteger(Number(stream.index)) && Number(stream.index) >= 0 ? Number(stream.index) : null,
     title: stream.displayTitle || stream.extendedDisplayTitle || [stream.language || "Unknown language", stream.codec, stream.forced ? "Forced" : "", stream.default ? "Default" : ""].filter(Boolean).join(" · "),
     language: stream.languageCode || stream.languageTag || "", codec: String(stream.codec || "").toLowerCase(),
-    selected: !!stream.selected, forced: !!stream.forced, external: !!stream.key
+    selected: P.flag(stream.selected), forced: P.flag(stream.forced), external: !!stream.key
   }));
 }
 const languages = { en:"eng",es:"spa",fr:"fra",de:"deu",it:"ita",pt:"por",ja:"jpn",ko:"kor",zh:"zho",ru:"rus" };
@@ -50,7 +50,10 @@ function selectTracks(part, options, preferences) {
   return { audio: selectedAudio || null, subtitle: selectedSub || null, subtitleOff: selectedSub === null };
 }
 function markers(item) {
-  return (item.Marker || []).filter(marker=>["intro","credits"].includes(marker.type) && Number(marker.endTimeOffset)>Number(marker.startTimeOffset)).map(marker=>({ type:marker.type,start:Number(marker.startTimeOffset),end:Number(marker.endTimeOffset) }));
+  return (item.Marker || []).map(marker => ({
+    type:marker.type,start:Number(marker.startTimeOffset),end:Number(marker.endTimeOffset)
+  })).filter(marker => ["intro","credits"].includes(marker.type) &&
+    Number.isFinite(marker.start) && Number.isFinite(marker.end) && marker.start >= 0 && marker.end > marker.start);
 }
 function xmlAttributes(text, name) {
   // This only reads attributes from Plex's legacy Home responses; DTDs/entities are never evaluated.

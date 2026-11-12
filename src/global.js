@@ -228,7 +228,7 @@ guarded("discover", async () => {
   }
   if (currentSession !== session) return;
   servers = result.filter(s => (s.provides || "").split(",").indexOf("server") !== -1 && s.accessToken);
-  send("servers", servers.map(s => ({ id: s.clientIdentifier, name: s.name, owned: !!s.owned })));
+  send("servers", servers.map(s => ({ id: s.clientIdentifier, name: s.name, owned: P.flag(s.owned) })));
 });
 guarded("connect", async data => {
   const server = servers.find(s => s.clientIdentifier === data.id);
@@ -267,7 +267,7 @@ guarded("home-users",async()=>{
     const result=await homeRequest("/api/home/users");
     if(currentSession!==session)return;
     homeUsers=result.users||result.User||(result.MediaContainer&&result.MediaContainer.User)||[];
-    homeUsers=homeUsers.filter(user=>/^\d+$/.test(String(user.id))).map(user=>({id:String(user.id),title:user.title||user.username||"Home user",protected:user.protected===true||String(user.protected)==="1",admin:user.admin===true||String(user.admin)==="1"}));
+    homeUsers=homeUsers.filter(user=>/^\d+$/.test(String(user.id))).map(user=>({id:String(user.id),title:user.title||user.username||"Home user",protected:P.flag(user.protected),admin:P.flag(user.admin)}));
     send("home-users",{users:homeUsers,selected:profileID,needsSelection:needsProfile});
   }catch(error){if(currentSession!==session)return;send("home-users",{users:[],selected:profileID,needsSelection:needsProfile});if(needsProfile)throw error;}
 });
@@ -536,15 +536,22 @@ guarded("details",async data=>{
   }
   send("details",Object.assign({id:String(data.id),request:data.request,serverID:connection.serverID,item:P.listing({Metadata:[item]},0,1).items[0]},options));
 });
-guarded("preferences",async data=>{
-  for(const key of ["audioLanguage","subtitleLanguage"]){if(data[key]!=null){const value=String(data[key]).trim().toLowerCase();if(value&&!/^[a-z]{2,3}(-[a-z]+)?$/.test(value))throw new Error("Use a language code such as en or eng.");preferences.set(key,value);}}
-  if(data.subtitleMode!=null&&["auto","forced","off"].includes(data.subtitleMode))preferences.set("subtitleMode",data.subtitleMode);
-  if(typeof data.autoNext==="boolean"){
-    preferences.set("autoNext",data.autoNext);
-    if(!data.autoNext)cancelNext();
+guarded("preferences", async data => {
+  const updates = {};
+  for (const key of ["audioLanguage", "subtitleLanguage"]) {
+    if (data[key] == null) continue;
+    const value = String(data[key]).trim().toLowerCase();
+    if (value && !/^[a-z]{2,3}(-[a-z]+)?$/.test(value)) throw new Error("Use a language code such as en or eng.");
+    updates[key] = value;
   }
-  if(typeof data.includeSpecials==="boolean")preferences.set("includeSpecials",data.includeSpecials);
-  preferences.sync();send("preferences",settings());
+  if (data.subtitleMode != null && ["auto", "forced", "off"].includes(data.subtitleMode)) updates.subtitleMode = data.subtitleMode;
+  for (const key of ["autoNext", "includeSpecials"]) {
+    if (typeof data[key] === "boolean") updates[key] = data[key];
+  }
+  for (const [key, value] of Object.entries(updates)) preferences.set(key, value);
+  preferences.sync();
+  if (updates.autoNext === false) cancelNext();
+  send("preferences", settings());
 });
 
 function defaultQueuePlayer() {

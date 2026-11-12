@@ -14,12 +14,20 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
   function valid(record) {
     return record && typeof record.scope === "string" && typeof record.serverID === "string" &&
       /^\d+$/.test(String(record.ratingKey)) && Number.isFinite(record.time) && record.time >= 0 &&
-      Number.isFinite(record.duration) && record.duration > 0 && Number.isFinite(record.updatedAt) &&
+      Number.isFinite(record.duration) && record.duration > 0 && record.time <= record.duration &&
+      Number.isFinite(record.baseline) && record.baseline >= 0 &&
+      Number.isFinite(record.updatedAt) && record.updatedAt > 0 && record.updatedAt <= Date.now() + 1000 &&
       Date.now() - record.updatedAt < MAX_AGE;
   }
   try { journal = store.load ? store.load() : []; } catch (_) {}
-  journal = Array.isArray(journal) ? journal.filter(valid).slice(-MAX_RECORDS) : [];
+  journal = Array.isArray(journal) ? journal.filter(valid).slice(-MAX_RECORDS).map(record => ({
+    key:record.scope + ":" + record.serverID + ":" + String(record.ratingKey),
+    scope:record.scope,serverID:record.serverID,ratingKey:String(record.ratingKey),
+    time:record.time,duration:record.duration,updatedAt:record.updatedAt,baseline:record.baseline
+  })) : [];
+  journal = Array.from(new Map(journal.map(record => [record.key, record])).values());
 
+  const position = value => Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 0;
   const key = entry => entry.connection.scope + ":" + entry.connection.serverID + ":" + entry.ratingKey;
   const matches = (entry, sender) => String(sender) === String(entry.playerID) ||
     String(sender) === entry.playerID + "-io.iina.plex-library";
@@ -30,6 +38,12 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
     try { if (store.save) store.save(journal); }
     catch (_) { notify("sync-storage-failed", {}); }
   }
+  function prune() {
+    const retained = journal.filter(valid);
+    if (retained.length === journal.length) return;
+    journal = retained;
+    persist();
+  }
   function remove(record) {
     // Remove the exact acknowledgement, never a newer update with the same timestamp.
     const index = journal.indexOf(record);
@@ -39,7 +53,7 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
   }
   function save(entry, update) {
     const itemKey = key(entry);
-    journal = journal.filter(record => record.key !== itemKey);
+    journal = journal.filter(record => record.key !== itemKey && valid(record));
     const record = {
       key: itemKey, scope: entry.connection.scope || "", serverID: entry.connection.serverID,
       ratingKey: entry.ratingKey, time: update.time, duration: update.duration,
@@ -53,7 +67,7 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
   function bind(playerID, sessionID, connection, ratingKey, baseline = 0) {
     const entry = {
       playerID, connection, ratingKey: String(ratingKey), pending: null, sending: false,
-      warned: false, closing: false, retries: 0, lastAck: Number(baseline) || 0,
+      warned: false, closing: false, retries: 0, lastAck: position(baseline),
       lastState: "stopped", waiters: []
     };
     for (const old of Object.keys(sessions)) {
@@ -119,7 +133,7 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
     const entry = data && sessions[data.sessionID];
     if (!entry || entry.closing || !matches(entry, sender)) return;
     if (!PLAYBACK_STATES.has(data.state) || !Number.isFinite(data.time) || !Number.isFinite(data.duration) ||
-        data.time < 0 || data.duration <= 0) return;
+        data.time < 0 || Math.round(data.duration) <= 0) return;
     entry.lastState = data.state;
     entry.pending = {
       state: data.state, time: Math.min(Math.round(data.time), Math.round(data.duration)),
@@ -157,6 +171,7 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
     if (forget) { journal = []; persist(); }
   }
   async function recover(connection, onlyID) {
+    prune();
     const recoveryKey = connection.scope + ":" + connection.serverID;
     // Queue requests so a caller's item filter isn't lost behind another recovery.
     const previous = recovering.get(recoveryKey), current = generation;
@@ -182,7 +197,7 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
           if (!item || String(item.ratingKey) !== record.ratingKey) continue;
           if (generation !== current) return;
           if (!journal.includes(record) || activeFor(record)) continue;
-          const serverTime = Number(item.viewOffset) || 0;
+          const serverTime = position(item.viewOffset);
           // Preserve another client's activity, and don't repeat an already applied update.
           if (serverTime === record.time || Number(item.lastViewedAt || 0) * 1000 > record.updatedAt + 1000 ||
               (serverTime !== record.baseline && serverTime !== record.time)) {
@@ -209,13 +224,15 @@ module.exports = function timelineSync(http, headers, notify, store = {}) {
     finally { if (recovering.get(recoveryKey) === run) recovering.delete(recoveryKey); }
   }
   function pendingPosition(connection, id, item) {
+    prune();
     const record = journal.find(record => record.scope === connection.scope &&
       record.serverID === connection.serverID && record.ratingKey === String(id));
     if (!record || Number(item.lastViewedAt || 0) * 1000 > record.updatedAt + 1000) return null;
-    const current = Number(item.viewOffset) || 0;
+    const current = position(item.viewOffset);
     return current === record.baseline || current === record.time ? record.time : null;
   }
   function hasPending(connection, id) {
+    prune();
     return journal.some(record => record.scope === connection.scope &&
       record.serverID === connection.serverID && record.ratingKey === String(id));
   }

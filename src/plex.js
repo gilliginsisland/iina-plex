@@ -1,4 +1,4 @@
-/* Pure helpers shared by IINA and the offline tests. No browser globals. */
+/* Plex URL and metadata helpers. */
 function query(values) {
   return Object.keys(values).map(key => encodeURIComponent(key) + "=" + encodeURIComponent(values[key])).join("&");
 }
@@ -9,7 +9,7 @@ function origin(value) {
 }
 function path(value) {
   // Never follow an absolute or protocol-relative key with a server credential.
-  if (typeof value !== "string" || !/^\/(?!\/)/.test(value) || /[\\\r\n#?]/.test(value) || /%(?:2e|2f|5c)/i.test(value) || value.split("/").some(x => x === "." || x === "..")) {
+  if (typeof value !== "string" || !/^\/(?!\/)/.test(value) || /[\\\u0000-\u001f\u007f#?]/.test(value) || /%(?:0[0-9a-f]|1[0-9a-f]|7f|2e|2f|5c)/i.test(value) || value.split("/").some(x => x === "." || x === "..")) {
     throw new Error("Invalid Plex media path.");
   }
   return value;
@@ -18,16 +18,21 @@ function id(value) {
   if (!/^\d+$/.test(String(value))) throw new Error("Invalid Plex item identifier.");
   return String(value);
 }
+function flag(value) {
+  return value === true || value === 1 || value === "1" || value === "true";
+}
 function connections(server, allowHTTP) {
-  return (server.connections || []).filter(c => {
+  return (Array.isArray(server.connections) ? server.connections : []).filter(c => {
+    if(!c || typeof c.uri !== "string")return false;
     try { origin(c.uri); } catch (_) { return false; }
-    return c.uri.indexOf("https://") === 0 || (allowHTTP && Boolean(c.local) && c.uri.indexOf("http://") === 0);
+    return c.uri.indexOf("https://") === 0 || (allowHTTP && flag(c.local) && c.uri.indexOf("http://") === 0);
   }).sort((a, b) => score(a) - score(b));
 }
-function score(c) { return (c.relay ? 10 : 0) + (c.uri.indexOf("https://") === 0 ? 0 : 4) + (c.local ? 0 : 2); }
+function score(c) { return (flag(c.relay) ? 10 : 0) + (c.uri.indexOf("https://") === 0 ? 0 : 4) + (flag(c.local) ? 0 : 2); }
 function listing(container, start, pageSize) {
   const items = container.Metadata || [];
-  const total = container.totalSize == null ? null : Number(container.totalSize);
+  const reportedTotal = container.totalSize == null || String(container.totalSize).trim() === "" ? NaN : Number(container.totalSize);
+  const total = Number.isInteger(reportedTotal) && reportedTotal >= 0 ? reportedTotal : null;
   return {
     items: items.map(item => ({
       id: id(item.ratingKey), title: item.title || "Untitled", type: item.type,
@@ -78,4 +83,4 @@ function imageData(bytes) {
   }
   return "data:" + mime + ";base64," + encoded;
 }
-module.exports = { query, origin, path, id, connections, listing, parts, resumePoint, imageData };
+module.exports = { query, origin, path, id, flag, connections, listing, parts, resumePoint, imageData };
