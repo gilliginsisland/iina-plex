@@ -23,6 +23,7 @@ class PlaybackTracker {
     this.resumePending = null;
     this.resumeConsumed = false;
     this.resumeStarted = 0;
+    this.resumePaused = null;
     this.announced = false;
     this.ended = false;
     this.closing = false;
@@ -81,25 +82,30 @@ class PlaybackTracker {
     if (!force && now - this.lastSent < 10000) return;
     const offset = this.offset;
     if (offset === null) return; // Do not guess offsets for skipped, unknown multipart files.
-    const duration =
-      this.media.urls.length === 1
-        ? this.partDuration || this.media.duration
-        : this.media.duration ||
-          (this.durations.length === this.media.urls.length && this.durations.every((d) => d > 0)
-            ? this.durations.reduce((a, b) => a + b, 0)
-            : 0);
+    const duration = this.duration;
     if (!(duration > 0)) return;
     this.lastSent = now;
     this.api.global.postMessage("playback-progress", {
       sessionID: this.media.sessionID,
       state: stopped ? "stopped" : this.state,
-      time: Math.min(duration, Math.max(0, Math.round(offset + this.partTime))),
+      time: Math.min(duration, Math.max(0, Math.round(offset))),
       duration: Math.round(duration),
       final: !!final
     });
   }
 
-  get offset() {
+  get duration() {
+    if (!this.media) return 0;
+    return this.media.urls.length === 1
+      ? this.partDuration || this.media.duration
+      : this.media.duration ||
+          (this.durations.length === this.media.urls.length && this.durations.every((d) => d > 0)
+            ? this.durations.reduce((a, b) => a + b, 0)
+            : 0);
+  }
+
+  get partOffset() {
+    if (this.index < 0) return null;
     let value = 0;
     for (let i = 0; i < this.index; i++) {
       if (!(this.durations[i] > 0)) return null;
@@ -108,8 +114,91 @@ class PlaybackTracker {
     return value;
   }
 
+  get offset() {
+    const before = this.partOffset;
+    return before === null ? null : before + this.partTime;
+  }
+
+  set offset(value) {
+    if (number(value) === null)
+      throw new TypeError("Playback offset must be a nonnegative number of milliseconds.");
+    if (
+      !this.media ||
+      !this.loaded ||
+      this.closing ||
+      this.index < 0 ||
+      this.currentPath !== this.media.urls[this.index]
+    ) {
+      throw new Error("Wait for this video to load before changing its position.");
+    }
+    let remaining = this.duration > 0 ? Math.min(value, this.duration) : value;
+    if (this.resumePending === null && this.offset === remaining) return;
+    let before = 0;
+    for (let part = 0; part < this.media.urls.length; part++) {
+      const duration =
+        this.durations[part] || (part === this.media.urls.length - 1 ? this.duration - before : 0);
+      if (!Number.isFinite(duration) || !(duration > 0))
+        throw new Error("Plex did not return the part durations needed to change position.");
+      if (remaining < duration || part === this.media.urls.length - 1) {
+        const position = Math.min(remaining, duration);
+        if (part === this.index) {
+          if (this.resumePending !== null) {
+            this.resumePending = position > 0 ? position : null;
+            this.resumeStarted = Date.now();
+          }
+          this.api.core.seekTo(position / 1000);
+        } else {
+          this.open(Object.assign({}, this.media, { resume: { index: part, position } }), true);
+        }
+        return;
+      }
+      remaining -= duration;
+      before += duration;
+    }
+  }
+
+  get paused() {
+    return this.api.mpv.getFlag("pause");
+  }
+
+  set paused(value) {
+    if (typeof value !== "boolean") throw new TypeError("Paused must be a boolean.");
+    if (!this.loaded && this.resumePaused !== null) this.resumePaused = value;
+    if (this.paused !== value) this.api.mpv.set("pause", value);
+  }
+
+  get audioTrack() {
+    return this.api.mpv.getNative("aid");
+  }
+
+  set audioTrack(value) {
+    if (!Number.isInteger(value) || value < 1) throw new TypeError("Choose an available audio track.");
+    if (this.audioTrack !== value) this.api.mpv.set("aid", value);
+  }
+
+  get subtitleTrack() {
+    return this.api.mpv.getNative("sid");
+  }
+
+  set subtitleTrack(value) {
+    if (value !== "no" && (!Number.isInteger(value) || value < 1))
+      throw new TypeError("Choose an available subtitle track, or no subtitles.");
+    if (value === "no" && [false, "no"].includes(this.subtitleTrack)) return;
+    if (this.subtitleTrack !== value) this.api.mpv.set("sid", value);
+  }
+
+  get introEnd() {
+    const marker = this.marker("intro");
+    return marker && this.duration > 0 ? Math.min(marker.end, Math.max(0, this.duration - 100)) : null;
+  }
+
+  get creditsEnd() {
+    const marker = this.marker("credits");
+    return marker && this.duration > 0 ? Math.min(marker.end, Math.max(0, this.duration - 100)) : null;
+  }
+
   marker(type) {
-    const before = this.offset;
+    const before = this.partOffset;
     if (!this.active || before === null || this.resumePending !== null) return null;
     return (
       (this.media.markers || []).find(
@@ -129,13 +218,13 @@ class PlaybackTracker {
     if (this.audioApplied !== this.index) {
       const audio = embeddedTrack(tracks, "audio", config.audio);
       if (audio) {
-        if (this.api.mpv.getNative("aid") !== audio.id) this.api.mpv.set("aid", audio.id);
+        this.audioTrack = audio.id;
         this.audioApplied = this.index;
       } else if (!config.audio) this.audioApplied = this.index;
     }
     if (this.subtitleApplied === this.index) return;
     if (config.subtitleOff) {
-      if (![false, "no", null].includes(this.api.mpv.getNative("sid"))) this.api.mpv.set("sid", "no");
+      this.subtitleTrack = "no";
       this.subtitleApplied = this.index;
       return;
     }
@@ -159,7 +248,7 @@ class PlaybackTracker {
       return;
     }
     if (subtitle) {
-      if (this.api.mpv.getNative("sid") !== subtitle.id) this.api.mpv.set("sid", subtitle.id);
+      this.subtitleTrack = subtitle.id;
       this.subtitleApplied = this.index;
     }
   }
@@ -208,7 +297,7 @@ class PlaybackTracker {
     const resumed = this.confirmResume();
     if (this.resumePending !== null && Date.now() - this.resumeStarted >= 30000) {
       this.tracking = false;
-      this.api.core.pause();
+      this.paused = true;
       this.api.global.postMessage("resume-failed", { sessionID: this.media.sessionID });
       return;
     }
@@ -225,6 +314,7 @@ class PlaybackTracker {
   }
 
   open(data, preserveSession = false) {
+    const paused = preserveSession ? this.paused : null;
     if (this.media && !preserveSession) {
       this.stop(true, this.active);
       this.api.global.postMessage("playback-closed", { sessionID: this.media.sessionID });
@@ -243,6 +333,7 @@ class PlaybackTracker {
     this.loaded = false;
     this.index = -1;
     this.resumePending = null;
+    this.resumePaused = paused;
     this.resumeConsumed = false;
     this.lastSent = 0;
     this.durations.length = 0;
@@ -252,41 +343,22 @@ class PlaybackTracker {
     data.urls.slice(startIndex + 1).forEach((url) => this.api.playlist.add(url));
   }
 
-  disable() {
-    this.tracking = false;
-  }
-
   get sessionID() {
     return this.media && this.media.sessionID;
   }
 
   get status() {
+    const introEnd = this.introEnd,
+      creditsEnd = this.creditsEnd;
     return {
       sessionID: this.sessionID,
       state: this.failed ? "error" : !this.loaded ? "opening" : !this.active ? "stopped" : this.state,
-      canSkipIntro: !!this.marker("intro"),
-      canSkipCredits: !!this.marker("credits")
+      paused: this.paused,
+      canSkipIntro: introEnd !== null,
+      canSkipCredits: creditsEnd !== null,
+      introEnd,
+      creditsEnd
     };
-  }
-
-  skip(type) {
-    const target = this.marker(type);
-    if (!target) return;
-    let remaining = target.end;
-    for (let part = 0; part < this.media.urls.length; part++) {
-      if (!(this.durations[part] > 0)) return;
-      if (remaining < this.durations[part]) {
-        if (part === this.index) this.api.core.seekTo(remaining / 1000);
-        else {
-          const data = Object.assign({}, this.media, { resume: { index: part, position: remaining } });
-          this.open(data, true);
-        }
-        return;
-      }
-      remaining -= this.durations[part];
-    }
-    if (this.index === this.media.urls.length - 1)
-      this.api.core.seekTo(Math.max(0, this.partDuration - 100) / 1000);
   }
 
   load() {
@@ -345,6 +417,10 @@ class PlaybackTracker {
     this.subtitleApplied = -1;
     this.partTime = 0;
     this.partDuration = this.durations[this.index] || 0;
+    if (this.resumePaused !== null) {
+      this.paused = this.resumePaused;
+      this.resumePaused = null;
+    }
     this.state = this.api.mpv.getFlag("paused-for-cache")
       ? "buffering"
       : this.api.mpv.getFlag("pause")

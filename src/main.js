@@ -5,11 +5,28 @@ class PlexPlayer {
   constructor(api) {
     this.api = api;
     this.lastState = "";
-    this.intro = api.menu.item("Skip intro", () => this.tracker.skip("intro"), { enabled: false });
-    this.credits = api.menu.item("Skip credits", () => this.tracker.skip("credits"), { enabled: false });
+    this.intro = api.menu.item(
+      "Skip intro",
+      () => {
+        const offset = this.tracker.introEnd;
+        if (offset !== null) this.applyState({ sessionID: this.tracker.sessionID, offset });
+      },
+      { enabled: false }
+    );
+    this.credits = api.menu.item(
+      "Skip credits",
+      () => {
+        const offset = this.tracker.creditsEnd;
+        if (offset !== null) this.applyState({ sessionID: this.tracker.sessionID, offset });
+      },
+      { enabled: false }
+    );
     this.tracker = new PlaybackTracker(api, () => this.publishState());
     this.onMessage("play-media", (data) => this.open(data));
-    this.onMessage("disable-sync", () => this.tracker.disable());
+    this.onMessage("disable-sync", () => {
+      this.tracker.tracking = false;
+    });
+    this.onMessage("player-state", (data) => this.applyState(data));
     this.onMessage("activate-player", () => {
       api.core.window.miniaturized = false;
     });
@@ -48,10 +65,18 @@ class PlexPlayer {
   }
 
   control(action) {
-    if (action === "skip-intro") this.tracker.skip("intro");
-    if (action === "skip-credits") this.tracker.skip("credits");
     if (action === "stop") this.api.core.stop();
     if (action === "activate") this.api.core.window.miniaturized = false;
+  }
+
+  applyState(data) {
+    if (data.sessionID !== this.tracker.sessionID) return;
+    try {
+      if (data.offset !== undefined) this.tracker.offset = data.offset;
+      if (data.paused !== undefined) this.tracker.paused = data.paused;
+    } catch (_) {
+      this.api.global.postMessage("player-state-error", { sessionID: data.sessionID });
+    }
   }
 }
 

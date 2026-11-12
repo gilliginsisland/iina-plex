@@ -501,7 +501,12 @@ class PlexBrowser extends PlexElement {
     bind("play-season","click",()=>{const crumb=this.view("breadcrumbs").lastElementChild;if(crumb)this.post("queue-series",{id:crumb.ratingKey});});
     bind("clear-queue","click",()=>this.queueAction({action:"clear"}));
     bind("up-next-play","click",()=>this.queueAction({action:"play",index:0}));bind("up-next-cancel","click",()=>this.queueAction({action:"cancel-next"}));
-    for(const [id,action]of [["show-player","activate"],["stop-player","stop"],["next-player","next"],["skip-intro","skip-intro"],["skip-credits","skip-credits"]])bind(id,"click",()=>this.post("player-control",{playerID:Number(this.view("active-player").value),action}));
+    for(const [id,action]of [["show-player","activate"],["stop-player","stop"],["next-player","next"]])bind(id,"click",()=>this.post("player-control",{playerID:Number(this.view("active-player").value),action}));
+    for(const [id,property]of [["skip-intro","introEnd"],["skip-credits","creditsEnd"]])bind(id,"click",()=>{
+      const option=this.view("active-player").selectedOptions[0];
+      if(!option||!option.dataset.sessionId||option.dataset[property]==null||option.dataset[property]===""||!Number.isFinite(Number(option.dataset[property])))return;
+      this.post("player-state",{playerID:Number(option.value),sessionID:option.dataset.sessionId,offset:Number(option.dataset[property])});
+    });
     bind("active-player","change",()=>this.renderPlayer());
     for(const id of ["audio-language","subtitle-language","subtitle-mode","auto-next","include-specials"])bind(id,"change",()=>this.post("preferences",{audioLanguage:this.view("audio-language").value,subtitleLanguage:this.view("subtitle-language").value,subtitleMode:this.view("subtitle-mode").value,autoNext:this.view("auto-next").checked,includeSpecials:this.view("include-specials").checked}));
     bind("choose-profile","click",()=>{this._chooseProfileRequested=true;this.post("home-users");});
@@ -594,7 +599,7 @@ class PlexBrowser extends PlexElement {
     on("artwork",data=>{const list=this.view("items");list.acceptArtwork(data);const item=list.findItem(data.id);if(item&&data.request===list.request)this.syncDetails(item);});
     on("artwork-done",data=>this.view("items").finishArtwork(data));on("progress-synced",data=>this.updateProgress(data,false));on("item-synced",data=>this.updateProgress(data,true));
     on("queue",data=>{const queue=this.view("queue");queue.setAttribute("revision",data.revision||0);queue.replaceChildren();for(const item of data.items)queue.append(document.createElement("plex-queue-item").setProperties({queueIndex:item.index,mediaTitle:item.title,ratingKey:item.id}));this.view("queue-panel").hidden=!queue.childElementCount;queue.toggleAttribute("busy",data.busy===true);this.renderPlayer();});
-    on("players",players=>{const select=this.view("active-player"),old=select.value;select.replaceChildren();for(const player of players){const option=document.createElement("option");option.value=player.playerID;option.textContent=player.title;option.dataset.state=player.state;option.dataset.intro=String(player.canSkipIntro);option.dataset.credits=String(player.canSkipCredits);select.append(option);}if(Array.from(select.options).some(option=>option.value===old))select.value=old;this.renderPlayer();});
+    on("players",players=>{const select=this.view("active-player"),old=select.value;select.replaceChildren();for(const player of players){const option=document.createElement("option");option.value=player.playerID;option.textContent=player.title;option.dataset.state=player.state;option.dataset.sessionId=player.sessionID;option.dataset.intro=String(player.canSkipIntro);option.dataset.credits=String(player.canSkipCredits);option.dataset.introEnd=player.introEnd==null?"":String(player.introEnd);option.dataset.creditsEnd=player.creditsEnd==null?"":String(player.creditsEnd);select.append(option);}if(Array.from(select.options).some(option=>option.value===old))select.value=old;this.renderPlayer();});
     on("up-next",data=>{
       if(this._countdown)clearInterval(this._countdown);this.view("up-next").hidden=!data;if(!data)return;
       let seconds=data.seconds;const update=()=>this.view("up-next-label").textContent="Up next: "+data.title+" · "+seconds+"s";update();this._countdown=setInterval(()=>{seconds=Math.max(0,seconds-1);update();},1000);

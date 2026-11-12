@@ -29,6 +29,7 @@ class PlexPlayers {
 
   registerEvents() {
     this.app.guarded("player-control", (data) => this.control(data));
+    this.app.guarded("player-state", (data) => this.updateState(data));
     this.app.api.global.onMessage("playback-progress", (data, sender) => this.progress(data, sender));
     this.app.api.global.onMessage("playback-closed", (data, sender) => this.closed(data, sender));
     this.app.api.global.onMessage("playback-started", (data, sender) => this.started(data, sender));
@@ -37,6 +38,13 @@ class PlexPlayers {
     this.app.api.global.onMessage("playback-complete", (data, sender) => this.completed(data, sender));
     this.app.api.global.onMessage("player-state", (data, sender) => this.stateChanged(data, sender));
     this.app.api.global.onMessage("resume-failed", (data, sender) => this.resumeFailed(data, sender));
+    this.app.api.global.onMessage("player-state-error", (data, sender) => {
+      if (this.entryFor(data, sender))
+        this.app.send("notice", {
+          message:
+            "IINA could not apply the requested playback state. Wait for the video to load and try again."
+        });
+    });
   }
 
   entryFor(data, sender) {
@@ -86,12 +94,16 @@ class PlexPlayers {
   get snapshot() {
     return Array.from(this.live.values()).map((entry) => ({
       playerID: entry.playerID,
+      sessionID: entry.sessionID,
       id: entry.id,
       title: entry.title,
       serverID: entry.connection.serverID,
       state: entry.state || "opening",
-      canSkipIntro: !!entry.canSkipIntro,
-      canSkipCredits: !!entry.canSkipCredits
+      paused: entry.paused === true,
+      canSkipIntro: entry.introEnd != null,
+      canSkipCredits: entry.creditsEnd != null,
+      introEnd: entry.introEnd == null ? null : entry.introEnd,
+      creditsEnd: entry.creditsEnd == null ? null : entry.creditsEnd
     }));
   }
 
@@ -311,9 +323,29 @@ class PlexPlayers {
       this.stop(playerID);
       return;
     }
-    if (["skip-intro", "skip-credits", "activate"].includes(data.action))
+    if (data.action === "activate")
       this.app.api.global.postMessage(playerID, "player-control", { action: data.action });
     if (data.action === "activate") this.app.hideBrowser();
+  }
+
+  updateState(data) {
+    const playerID = Number(data.playerID),
+      entry = this.find(playerID);
+    if (!entry || data.sessionID !== entry.sessionID)
+      throw new Error("This playback session is no longer available.");
+    const state = { sessionID: entry.sessionID };
+    if (data.offset !== undefined) {
+      if (!Number.isFinite(data.offset) || data.offset < 0)
+        throw new Error("Playback offset must be a nonnegative number of milliseconds.");
+      state.offset = data.offset;
+    }
+    if (data.paused !== undefined) {
+      if (typeof data.paused !== "boolean") throw new Error("Paused must be a boolean.");
+      state.paused = data.paused;
+    }
+    if (state.offset === undefined && state.paused === undefined)
+      throw new Error("Choose a playback position or pause state to update.");
+    this.app.api.global.postMessage(playerID, "player-state", state);
   }
 
   stop(playerID) {
@@ -407,8 +439,9 @@ class PlexPlayers {
     const entry = this.entryFor(data, sender);
     if (!entry) return;
     entry.state = data.state;
-    entry.canSkipIntro = data.canSkipIntro === true;
-    entry.canSkipCredits = data.canSkipCredits === true;
+    entry.paused = data.paused === true;
+    entry.introEnd = Number.isFinite(data.introEnd) && data.introEnd >= 0 ? data.introEnd : null;
+    entry.creditsEnd = Number.isFinite(data.creditsEnd) && data.creditsEnd >= 0 ? data.creditsEnd : null;
     this.publish();
   }
 
