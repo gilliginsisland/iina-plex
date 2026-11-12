@@ -12,8 +12,8 @@ const credentials = require("./storage.js")(iina.utils, preferences);
 let restored = false;
 let artwork = {}, artworkSerial = 0;
 let token = null, servers = [], selected = null, authGeneration = 0, session = 0;
-const opening = new Set(), livePlayers = new Map();
-let queue = [], queuePlayer = null, nextTimer = null, queueRevision = 0;
+const opening = new Map(), livePlayers = new Map();
+let queue = [], queuePlayer = null, nextTimer = null, queueRevision = 0, queueGeneration = 0, queuePreparation = 0;
 let homeUsers = [], profileID = "owner", profileToken = null, accountID = "", needsProfile = false;
 let browseGeneration = 0, connectionGeneration = 0, queueBusy = false;
 let identifyingAccount = null;
@@ -53,7 +53,12 @@ function cleanFiles(entry) { for (const path of entry.files || []) { try { if (i
 function publishPlayers() { send("players", Array.from(livePlayers.values()).map(entry=>({playerID:entry.playerID,id:entry.id,title:entry.title,serverID:entry.connection.serverID,state:entry.state||"opening",canSkipIntro:!!entry.canSkipIntro,canSkipCredits:!!entry.canSkipCredits}))); }
 function publishQueue() { send("queue", { busy:queueBusy, revision: ++queueRevision, items: queue.map((entry,index)=>({ id:entry.id,title:entry.title,index,serverID:entry.connection.serverID })) }); }
 function cancelNext() { if (nextTimer !== null) clearTimeout(nextTimer); nextTimer = null; send("up-next", null); }
-function resetQueue() { cancelNext(); queue = []; queuePlayer = null; publishQueue(); }
+function resetQueue() {
+  queueGeneration++;
+  queuePreparation++;
+  queueBusy = false;
+  cancelNext();queue = [];queuePlayer = null;publishQueue();
+}
 const send = (name, data) => window.postMessage(name, data);
 const sync = require("./sync.js")(http, headers, (name, data) => {
   if (name === "item-synced") {
@@ -130,7 +135,10 @@ window.loadFile("ui/browser.html");
 window.setProperty({ title: "Plex Library", resizable: true });
 window.setFrame(1180, 800);
 function openBrowser() { window.open(); }
-function hideBrowser() { setTimeout(()=>window.close(),0); }
+function hideBrowser() {
+  const currentSession=session;
+  setTimeout(()=>{if(currentSession===session)window.close();},0);
+}
 iina.menu.addItem(iina.menu.item("Browse Plex Library…", openBrowser));
 guarded("ready", async () => {
   send("preferences",settings());
@@ -418,54 +426,103 @@ async function subtitleFile(connection,stream,sessionID,files) {
 function onMainThread(callback) {
   return new Promise((resolve,reject)=>setTimeout(()=>{try{resolve(callback());}catch(error){reject(error);}},0));
 }
-async function launch(connection,id,options={},reusePlayer=null,hideLibrary=true) {
-  if(connection.scope!==scope())throw new Error("This selection belongs to a previous profile. Refresh the library.");
-  id=P.id(id);const key=connection.scope+":"+connection.serverID+":"+id;
-  if(opening.has(key))return null;
-  const existing=livePlayers.get(key);
-  if(existing&&existing.playerID!==reusePlayer){
-    if(options.restart||existing.state==="stopped")reusePlayer=existing.playerID;
-    else { players.postMessage(existing.playerID,"activate-player",{}); send("playing",{title:existing.title,existing:true,id,serverID:connection.serverID});if(hideLibrary&&existing.started)hideBrowser();return existing; }
+async function launch(connection, id, options = {}, target = {}) {
+  if (connection.scope !== scope()) throw new Error("This selection belongs to a previous profile. Refresh the library.");
+  const currentSession = session;
+  const isCurrent = () => currentSession === session && connection.scope === scope() &&
+    (!target.isCurrent || target.isCurrent());
+  if (!isCurrent()) return null;
+  let reusePlayer = target.playerID == null ? null : target.playerID;
+  const hideLibrary = target.hideLibrary !== false;
+  id = P.id(id);
+  const key = connection.scope + ":" + connection.serverID + ":" + id;
+  const pending = opening.get(key);
+  if (pending && pending.isCurrent()) return null;
+  const existing = livePlayers.get(key);
+  if (existing && existing.playerID !== reusePlayer) {
+    if (options.restart || existing.state === "stopped") reusePlayer = existing.playerID;
+    else {
+      players.postMessage(existing.playerID, "activate-player", {});
+      send("playing", {title:existing.title,existing:true,id,serverID:connection.serverID});
+      if (hideLibrary && existing.started) hideBrowser();
+      return existing;
+    }
   }
-  opening.add(key);send("opening",{id,serverID:connection.serverID});
-  const files=[];
+  const operation = {isCurrent}, files = [];
+  let handedOff = false, entry = null;
+  opening.set(key, operation);
+  send("opening", {id,serverID:connection.serverID});
   try {
-    await sync.recover(connection,id);
-    const item=await metadataAt(connection,id);
-    if(connection.scope!==scope())return null;
-    if(!["movie","episode"].includes(item.type))throw new Error("Select a movie or episode to play.");
-    const serverBaseline=Number(item.viewOffset)||0;
-    const pending=sync.pendingPosition(connection,id,item);if(pending!==null&&!options.restart)item.viewOffset=pending;
-    const chosen=Media.chooseVersion(item,options.versionId), parts=chosen.media.Part||[];
-    const urls=P.parts(item,chosen.choice.index).map(path=>connection.base+path);
-    const resume=options.restart===true?{index:0,position:0}:P.resumePoint(item,chosen.choice.index);
-    const sessionID=clientID+"-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2);
-    const title=Media.playbackTitle(item);
-    const preferred=settings(),initial=Media.selectTracks(parts[resume.index],options,preferred),tracks=[];
-    for(let index=0;index<parts.length;index++){
-      const selectedTracks=index===resume.index?initial:Media.selectTracks(parts[index],{},Object.assign({},preferred,{audioLanguage:initial.audio&&initial.audio.language||preferred.audioLanguage,subtitleLanguage:initial.subtitle&&initial.subtitle.language||preferred.subtitleLanguage}));
-      if(selectedTracks.subtitle&&selectedTracks.subtitle.external) selectedTracks.externalFile=await subtitleFile(connection,selectedTracks.subtitle,sessionID,files);
+    await sync.recover(connection, id);
+    if (!isCurrent()) return null;
+    const item = await metadataAt(connection, id);
+    if (!isCurrent()) return null;
+    if (!["movie", "episode"].includes(item.type)) throw new Error("Select a movie or episode to play.");
+    const serverBaseline = Number(item.viewOffset) || 0;
+    const saved = sync.pendingPosition(connection, id, item);
+    if (saved !== null && !options.restart) item.viewOffset = saved;
+    const chosen = Media.chooseVersion(item, options.versionId), parts = chosen.media.Part || [];
+    const urls = P.parts(item, chosen.choice.index).map(path => connection.base + path);
+    const resume = options.restart === true ? {index:0,position:0} : P.resumePoint(item, chosen.choice.index);
+    const sessionID = clientID + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    const title = Media.playbackTitle(item);
+    const preferred = settings(), initial = Media.selectTracks(parts[resume.index], options, preferred), tracks = [];
+    for (let index = 0; index < parts.length; index++) {
+      if(index<resume.index){tracks.push(null);continue;}
+      const selectedTracks = index === resume.index ? initial : Media.selectTracks(parts[index], {},
+        Object.assign({}, preferred, {
+          audioLanguage:initial.audio && initial.audio.language || preferred.audioLanguage,
+          subtitleLanguage:initial.subtitle && initial.subtitle.language || preferred.subtitleLanguage
+        }));
+      if (selectedTracks.subtitle && selectedTracks.subtitle.external) {
+        selectedTracks.externalFile = await subtitleFile(connection, selectedTracks.subtitle, sessionID, files);
+        if (!isCurrent()) return null;
+      }
       tracks.push(selectedTracks);
     }
-    if(connection.scope!==scope()){cleanFiles({files});return null;}
-    return await onMainThread(()=>{
-      if(connection.scope!==scope()){cleanFiles({files});return null;}
-      const playerID=reusePlayer==null?players.createPlayerInstance({label:"plex-playback",enablePlugins:false}):reusePlayer;
-      const entry={key,id,connection,playerID,sessionID,title,files,started:false,options,hideLibrary};
-      // Keep old sync records until their final acknowledgement; registry ownership moves to this item.
-      for(const [oldKey,old]of livePlayers)if(old.playerID===playerID){livePlayers.delete(oldKey);setTimeout(()=>cleanFiles(old),30000);}
-      livePlayers.set(key,entry);publishPlayers();sync.bind(playerID,sessionID,connection,id,serverBaseline);
-      const partDurations=parts.map(part=>Number(part.duration)>0?Number(part.duration):0);
-      players.postMessage(playerID,"play-media",{urls,title,token:connection.token,sessionID,duration:chosen.choice.duration,partDurations,resume,tracks,markers:Media.markers(item)});
+    return await onMainThread(() => {
+      if (!isCurrent()) return null;
+      const playerID = reusePlayer == null ? players.createPlayerInstance({label:"plex-playback",enablePlugins:false}) : reusePlayer;
+      entry = {key,id,connection,playerID,sessionID,title,files,started:false,options,hideLibrary};
+      for (const [oldKey, old] of livePlayers) {
+        if (old.playerID === playerID) {
+          livePlayers.delete(oldKey);
+          setTimeout(() => cleanFiles(old), 30000);
+        }
+      }
+      livePlayers.set(key, entry);
+      publishPlayers();sync.bind(playerID, sessionID, connection, id, serverBaseline);
+      const partDurations = parts.map(part => Number(part.duration) > 0 ? Number(part.duration) : 0);
+      players.postMessage(playerID, "play-media", {
+        urls,title,token:connection.token,sessionID,duration:chosen.choice.duration,
+        partDurations,resume,tracks,markers:Media.markers(item)
+      });
+      handedOff = true;
       return entry;
     });
-  } catch(error){cleanFiles({files});send("opening-ended",{id,serverID:connection.serverID});throw error;}
-  finally{opening.delete(key);}
+  } catch (error) {
+    if(isCurrent())throw error;
+    return null;
+  } finally {
+    if (!handedOff) {
+      cleanFiles({files});
+      if (entry && livePlayers.get(key) === entry) {
+        livePlayers.delete(key);
+        sync.close({sessionID:entry.sessionID}, entry.playerID);
+        publishPlayers();
+      }
+    }
+    if (opening.get(key) === operation) {
+      opening.delete(key);
+      if (!handedOff && currentSession === session) send("opening-ended", {id,serverID:connection.serverID});
+    }
+  }
 }
 guarded("play",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
+  const generation=queueGeneration;
   cancelNext();const entry=await launch(selected,data.id,data);
-  if(entry&&queue.length)queuePlayer=entry.playerID;
+  if(entry&&queue.length&&generation===queueGeneration)queuePlayer=entry.playerID;
 });
 guarded("details",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
@@ -482,7 +539,10 @@ guarded("details",async data=>{
 guarded("preferences",async data=>{
   for(const key of ["audioLanguage","subtitleLanguage"]){if(data[key]!=null){const value=String(data[key]).trim().toLowerCase();if(value&&!/^[a-z]{2,3}(-[a-z]+)?$/.test(value))throw new Error("Use a language code such as en or eng.");preferences.set(key,value);}}
   if(data.subtitleMode!=null&&["auto","forced","off"].includes(data.subtitleMode))preferences.set("subtitleMode",data.subtitleMode);
-  if(typeof data.autoNext==="boolean")preferences.set("autoNext",data.autoNext);
+  if(typeof data.autoNext==="boolean"){
+    preferences.set("autoNext",data.autoNext);
+    if(!data.autoNext)cancelNext();
+  }
   if(typeof data.includeSpecials==="boolean")preferences.set("includeSpecials",data.includeSpecials);
   preferences.sync();send("preferences",settings());
 });
@@ -491,32 +551,39 @@ function defaultQueuePlayer() {
   const entries=Array.from(livePlayers.values()).filter(entry=>entry.connection.scope===scope());
   return entries.length?entries[entries.length-1].playerID:null;
 }
-async function advanceQueue(playerID=queuePlayer,index=0,hideLibrary=true) {
-  if(queueBusy||!queue[index])return;
-  const record=queue[index];if(record.connection.scope!==scope())throw new Error("Queue belongs to a different profile.");
-  if(playerID!=null&&!Array.from(livePlayers.values()).some(entry=>entry.playerID===playerID))playerID=null;
-  queueBusy=true;cancelNext();publishQueue();
-  try{
-    const entry=await launch(record.connection,record.id,record.options,playerID,hideLibrary);
-    if(!entry)return;
-    if(playerID!=null&&entry.playerID!==playerID)players.postMessage(playerID,"player-control",{action:"stop"});
-    const position=queue.indexOf(record);if(position>=0)queue.splice(position,1);
-    queuePlayer=entry.playerID;
-  }finally{queueBusy=false;publishQueue();}
+async function advanceQueue(playerID = queuePlayer, index = 0, hideLibrary = true) {
+  if (queueBusy || !queue[index]) return;
+  const record = queue[index], generation = queueGeneration;
+  const isCurrent = () => generation === queueGeneration;
+  if (record.connection.scope !== scope()) throw new Error("Queue belongs to a different profile.");
+  if (playerID != null && !Array.from(livePlayers.values()).some(entry => entry.playerID === playerID)) playerID = null;
+  queueBusy = true;cancelNext();publishQueue();
+  try {
+    const mayOpen = () => isCurrent() && (hideLibrary || settings().autoNext);
+    const entry = await launch(record.connection, record.id, record.options, {playerID,hideLibrary,isCurrent:mayOpen});
+    if (!entry || !isCurrent()) return;
+    if (playerID != null && entry.playerID !== playerID) players.postMessage(playerID, "player-control", {action:"stop"});
+    const position = queue.indexOf(record);
+    if (position >= 0) queue.splice(position, 1);
+    queuePlayer = entry.playerID;
+  } finally {
+    if (isCurrent()) { queueBusy = false;publishQueue(); }
+  }
 }
 guarded("queue-add",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
-  const connection=selected,item=await metadataAt(connection,data.id);
-  if(selected!==connection)return;
+  const connection=selected,generation=queueGeneration,item=await metadataAt(connection,data.id);
+  if(selected!==connection||generation!==queueGeneration)return;
   if(!["movie","episode"].includes(item.type))throw new Error("Choose a movie or episode.");
   const record={id:P.id(item.ratingKey),title:item.title,connection,options:{versionId:data.versionId,audioId:data.audioId,subtitleId:data.subtitleId}};
+  cancelNext();
   if(data.position==="next")queue.unshift(record);else queue.push(record);
   queuePlayer=queuePlayer||defaultQueuePlayer();publishQueue();send("notice",{message:"Added “"+item.title+"” to the queue."});
 });
 guarded("queue-action",async data=>{
+  if(data.revision!=null&&Number(data.revision)!==queueRevision)throw new Error("Queue changed. Try again.");
   if(data.action==="clear"){resetQueue();return;}
   if(data.action==="cancel-next"){cancelNext();return;}
-  if(data.revision!=null&&Number(data.revision)!==queueRevision)throw new Error("Queue changed. Try again.");
   const index=Number(data.index);if(!Number.isInteger(index)||index<0||index>=queue.length)throw new Error("Queue changed. Try again.");
   if(data.action==="play"){await advanceQueue(queuePlayer,index);return;}
   if(queueBusy)throw new Error("Wait for the queued video to open.");
@@ -526,10 +593,11 @@ guarded("queue-action",async data=>{
   else if(data.action==="down"&&index<queue.length-1)[queue[index+1],queue[index]]=[queue[index],queue[index+1]];
   publishQueue();
 });
-async function leaves(connection,id) {
+async function leaves(connection,id,isCurrent=()=>true) {
   const all=[];
   for(let start=0;start<5000;start+=200){
     const result=await request(connection.base+"/library/metadata/"+P.id(id)+"/allLeaves?"+P.query({"X-Plex-Container-Start":start,"X-Plex-Container-Size":200}),connection.token);
+    if(!isCurrent())return [];
     const container=result.MediaContainer,items=container.Metadata||[];all.push(...items);
     if(items.length<200||(container.totalSize!=null&&all.length>=Number(container.totalSize)))return uniqueItems(all);
   }
@@ -537,14 +605,17 @@ async function leaves(connection,id) {
 }
 guarded("queue-series",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
-  const connection=selected,parent=await metadataAt(connection,data.id);
+  const connection=selected,generation=queueRevision,preparation=++queuePreparation;
+  const isCurrent=()=>selected===connection&&generation===queueRevision&&preparation===queuePreparation;
+  const parent=await metadataAt(connection,data.id);
+  if(!isCurrent())return;
   if(!["show","season","episode"].includes(parent.type))throw new Error("Choose a show or season.");
   const id=parent.type==="episode"?parent.grandparentRatingKey||parent.parentRatingKey:parent.ratingKey;
-  let episodes=(await leaves(connection,id)).filter(item=>item.type==="episode");
+  let episodes=(await leaves(connection,id,isCurrent)).filter(item=>item.type==="episode");
   if(parent.type==="show"&&!settings().includeSpecials)episodes=episodes.filter(item=>Number(item.parentIndex)!==0);
   episodes.sort((a,b)=>Number(a.parentIndex||0)-Number(b.parentIndex||0)||Number(a.index||0)-Number(b.index||0));
   if(parent.type==="episode"){const index=episodes.findIndex(item=>String(item.ratingKey)===String(parent.ratingKey));if(index>=0)episodes=episodes.slice(index);}
-  if(selected!==connection)return;if(!episodes.length)throw new Error("No playable episodes found.");
+  if(!isCurrent())return;if(!episodes.length)throw new Error("No playable episodes found.");
   resetQueue();queue=episodes.map(item=>({id:P.id(item.ratingKey),title:(item.grandparentTitle?item.grandparentTitle+" · ":"")+item.title,connection,options:{}}));
   publishQueue();await advanceQueue(null);
 });

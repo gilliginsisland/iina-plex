@@ -394,7 +394,8 @@ class PlexMediaDetails extends PlexElement {
     this.part("loading").hidden=!this.loading;
     this.part("options").hidden=!this.playable;
     this.part("watched").textContent=this.watched?"Mark unwatched":"Mark watched";
-    this.part("play").disabled = this.opening || this.loading; this.part("restart").disabled = this.opening || this.loading;
+    for(const name of ["play","restart","queue","next"])this.part(name).disabled=this.opening||this.loading;
+    for(const name of ["version","audio","subtitle"])this.part(name).disabled=this.loading;
     this.part("play").textContent = this.progress > 0 && this.progress < 1 ? "▶ Resume at " + Math.floor(this.progress * this.duration / 60000) + ":" + String(Math.floor(this.progress * this.duration / 1000) % 60).padStart(2, "0") : "▶ Play in IINA";
     this.part("summary").textContent = this.summary || "No description available.";
     const dialog = this.part("dialog");
@@ -474,7 +475,7 @@ class PlexBrowser extends PlexElement {
     this.listen(this,"playback-options",event=>this.loadDetails(event.detail.versionId));
     this.listen(this,"media-queue",event=>this.post("queue-add",Object.assign({id:event.detail.item.ratingKey,position:event.detail.position},this.view("details").playbackOptions())));
     this.listen(this,"media-watched",event=>this.post("watched",{id:event.detail.item.ratingKey,watched:event.detail.watched}));
-    this.listen(this,"queue-action",event=>this.post("queue-action",Object.assign({revision:Number(this.view("queue").getAttribute("revision"))},event.detail)));
+    this.listen(this,"queue-action",event=>this.queueAction(event.detail));
     this.listen(this,"artwork-request",event=>this.post("artwork",event.detail));
     this.listen(this,"list-state-change",event=>this.pagination(event.detail.count));
     for(const button of this.view("discovery").children)this.listen(button,"click",()=>this.openView(button.dataset.view));
@@ -490,8 +491,8 @@ class PlexBrowser extends PlexElement {
     bind("back","click",()=>this.back());bind("refresh-view","click",()=>this.refreshView());
     bind("collections","click",()=>this.openView("collections"));bind("playlists","click",()=>this.openView("playlists"));
     bind("play-season","click",()=>{const crumb=this.view("breadcrumbs").lastElementChild;if(crumb)this.post("queue-series",{id:crumb.ratingKey});});
-    bind("clear-queue","click",()=>this.post("queue-action",{action:"clear"}));
-    bind("up-next-play","click",()=>this.post("queue-action",{action:"play",index:0}));bind("up-next-cancel","click",()=>this.post("queue-action",{action:"cancel-next"}));
+    bind("clear-queue","click",()=>this.queueAction({action:"clear"}));
+    bind("up-next-play","click",()=>this.queueAction({action:"play",index:0}));bind("up-next-cancel","click",()=>this.queueAction({action:"cancel-next"}));
     for(const [id,action]of [["show-player","activate"],["stop-player","stop"],["next-player","next"],["skip-intro","skip-intro"],["skip-credits","skip-credits"]])bind(id,"click",()=>this.post("player-control",{playerID:Number(this.view("active-player").value),action}));
     bind("active-player","change",()=>this.renderPlayer());
     for(const id of ["audio-language","subtitle-language","subtitle-mode","auto-next","include-specials"])bind(id,"change",()=>this.post("preferences",{audioLanguage:this.view("audio-language").value,subtitleLanguage:this.view("subtitle-language").value,subtitleMode:this.view("subtitle-mode").value,autoNext:this.view("auto-next").checked,includeSpecials:this.view("include-specials").checked}));
@@ -532,6 +533,7 @@ class PlexBrowser extends PlexElement {
   }
   connect(){if(!this.view("servers").value||this.busy)return;this.busy=true;this.resetNavigation();this.status("Connecting to server…");this.post("connect",{id:this.view("servers").value,allowHTTP:this.view("allow-http").checked});}
   play(item,options={}){if(item===this.view("details"))options=Object.assign({},item.playbackOptions(),options);this.view("details").open=false;this.status("Opening “"+item.mediaTitle+"” in IINA…");this.post("play",{id:item.ratingKey,restart:options.restart===true,versionId:options.versionId,audioId:options.audioId,subtitleId:options.subtitleId});}
+  queueAction(detail){this.post("queue-action",Object.assign({revision:Number(this.view("queue").getAttribute("revision"))},detail));}
   loadDetails(versionId){const details=this.view("details");details.request++;details.loading=true;this.post("details",{id:details.ratingKey,request:details.request,versionId});}
   syncDetails(item){const details=this.view("details");if(details.open&&details.ratingKey===item.ratingKey)details.copyFrom(item);}
   updateProgress(data,fromServer){if(data.serverID!==this.view("servers").value)return;const item=this.view("items").findItem(fromServer?data.item.id:data.id);if(!item)return;if(fromServer)this.applyMetadata(item,data.item);else item.progress=data.duration>0?Math.min(1,data.time/data.duration):0;this.syncDetails(item);}
