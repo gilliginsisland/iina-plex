@@ -3,7 +3,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
   let media = null, active = false, index = -1, partTime = 0, partDuration = 0;
   let lastSent = 0, state = "playing", tracking = true, loaded = false;
   let resumePending = null, resumeConsumed = false, resumeStarted = 0;
-  let announced = false, ended = false, closing = false, externalLoaded = -1, tracksApplied = -1, failed = false, loadingAttempt = false;
+  let announced = false, ended = false, closing = false, externalLoaded = -1, audioApplied = -1, subtitleApplied = -1, failed = false, loadingAttempt = false;
   const durations = [];
   const number = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
   function currentPath() { return api.mpv.getString("path"); }
@@ -44,26 +44,48 @@ module.exports = function playbackTracker(api, onState = () => {}) {
     const before=offset();if(!active||before===null||resumePending!==null)return null;
     return (media.markers||[]).find(marker=>marker.type===type&&before+partTime>=marker.start&&before+partTime<marker.end)||null;
   }
+  function embeddedTrack(tracks, type, stream) {
+    if (!stream || !Number.isInteger(stream.index)) return null;
+    return tracks.find(track => track.type === type && !track.external &&
+      Number(track["ff-index"]) === stream.index);
+  }
   function applyTracks() {
-    if(!media||index<0||!active||tracksApplied===index)return;
-    const config=(media.tracks||[])[index];if(!config)return;
-    const tracks=api.mpv.getNative("track-list")||[];
-    const audio=config.audio&&tracks.find(track=>track.type==="audio"&&!track.external&&Number(track["ff-index"])===config.audio.index);
-    if(audio&&api.mpv.getNative("aid")!==audio.id)api.mpv.set("aid",audio.id);
-    if(config.subtitleOff){if(![false,"no",null].includes(api.mpv.getNative("sid")))api.mpv.set("sid","no");if(!config.audio||audio)tracksApplied=index;return;}
-    let subtitleReady=!config.subtitle;
-    if(config.externalFile){
-      if(externalLoaded!==index){externalLoaded=index;api.core.subtitle.loadTrack(config.externalFile);}
-      const name=config.externalFile.split("/").pop();
-      const sub=tracks.find(track=>track.type==="sub"&&track.external&&String(track["external-filename"]||"").endsWith("/"+name));
-      if(sub&&api.mpv.getNative("sid")!==sub.id)api.mpv.set("sid",sub.id);
-      subtitleReady=!!sub;
-    } else if(config.subtitle){
-      const sub=tracks.find(track=>track.type==="sub"&&!track.external&&Number(track["ff-index"])===config.subtitle.index);
-      if(sub&&api.mpv.getNative("sid")!==sub.id)api.mpv.set("sid",sub.id);
-      subtitleReady=!!sub;
+    if (!media || index < 0 || !active) return;
+    const config = (media.tracks || [])[index];
+    if (!config || (audioApplied === index && subtitleApplied === index)) return;
+    const tracks = api.mpv.getNative("track-list") || [];
+    if (audioApplied !== index) {
+      const audio = embeddedTrack(tracks, "audio", config.audio);
+      if (audio) {
+        if (api.mpv.getNative("aid") !== audio.id) api.mpv.set("aid", audio.id);
+        audioApplied = index;
+      } else if (!config.audio) audioApplied = index;
     }
-    if((!config.audio||audio)&&subtitleReady)tracksApplied=index;
+    if (subtitleApplied === index) return;
+    if (config.subtitleOff) {
+      if (![false, "no", null].includes(api.mpv.getNative("sid"))) api.mpv.set("sid", "no");
+      subtitleApplied = index;
+      return;
+    }
+    let subtitle;
+    if (config.externalFile) {
+      if (externalLoaded !== index) {
+        externalLoaded = index;
+        api.core.subtitle.loadTrack(config.externalFile);
+      }
+      const name = config.externalFile.split("/").pop();
+      subtitle = tracks.find(track => track.type === "sub" && track.external &&
+        String(track["external-filename"] || "").endsWith("/" + name));
+    } else if (config.subtitle) {
+      subtitle = embeddedTrack(tracks, "sub", config.subtitle);
+    } else {
+      subtitleApplied = index;
+      return;
+    }
+    if (subtitle) {
+      if (api.mpv.getNative("sid") !== subtitle.id) api.mpv.set("sid", subtitle.id);
+      subtitleApplied = index;
+    }
   }
   function complete() {
     if(!media||!active||ended||closing||index!==media.urls.length-1||resumePending!==null)return;
@@ -106,12 +128,17 @@ module.exports = function playbackTracker(api, onState = () => {}) {
     if(loadingAttempt){stop(false,true);if(media)api.global.postMessage("playback-stopped",{sessionID:media.sessionID});}
     loadingAttempt=false;
   });
-  api.mpv.addHook("on_load_fail", 50, () => { if(media&&!failed){failed=true;tracking=false;api.global.postMessage("playback-error",{sessionID:media.sessionID});} });
+  api.mpv.addHook("on_load_fail", 50, () => {
+    if (!media || !tracking || failed || media.urls.indexOf(currentPath()) < 0) return;
+    failed = true;tracking = false;active = false;
+    api.global.postMessage("playback-error", {sessionID:media.sessionID});
+    onState();
+  });
   api.event.on("mpv.file-loaded", () => {
     if (!media || !tracking) return;
     index = media.urls.indexOf(currentPath());
     if (index < 0) return;
-    active = true; loaded = true; ended=false;tracksApplied=-1; partTime = 0; partDuration = durations[index] || 0;
+    active = true; loaded = true; ended=false;audioApplied=-1;subtitleApplied=-1; partTime = 0; partDuration = durations[index] || 0;
     state = api.mpv.getFlag("pause") ? "paused" : "playing";
     resumePending = !resumeConsumed && media.resume && index === media.resume.index && media.resume.position > 0 ? media.resume.position : null;
     resumeConsumed = true; resumeStarted = Date.now();
@@ -145,6 +172,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
   api.event.on("mpv.end-file", () => stop(false, false));
   const timer = setInterval(tick, 10000);
   function close() {
+    if(closing)return;
     closing=true;stop(true, active); clearInterval(timer);
     if (media) api.global.postMessage("playback-closed", { sessionID: media.sessionID });
   }
@@ -153,7 +181,7 @@ module.exports = function playbackTracker(api, onState = () => {}) {
   return {
     open(data, preserveSession = false) {
       if(media&&!preserveSession){stop(true,active);api.global.postMessage("playback-closed",{sessionID:media.sessionID});}
-      media = data; tracking = true; announced=false;ended=false;closing=false;externalLoaded=-1;tracksApplied=-1;failed=false;loadingAttempt=false; active = false; loaded = false; index = -1;
+      media = data; tracking = true; announced=false;ended=false;closing=false;externalLoaded=-1;audioApplied=-1;subtitleApplied=-1;failed=false;loadingAttempt=false; active = false; loaded = false; index = -1;
       resumePending = null; resumeConsumed = false; lastSent = 0; durations.length = 0;
       (data.partDurations || []).forEach((duration,i) => durations[i] = duration);
       const startIndex = data.resume ? data.resume.index : 0;
