@@ -625,8 +625,12 @@ async function advanceQueue(playerID = queuePlayer, index = 0, hideLibrary = tru
 }
 guarded("queue-add",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
-  const connection=selected,generation=queueGeneration,item=await metadataAt(connection,data.id);
-  if(selected!==connection||generation!==queueGeneration)return;
+  const connection=selected,generation=queueGeneration;
+  const isCurrent=()=>selected===connection&&generation===queueGeneration;
+  let item;
+  try { item=await metadataAt(connection,data.id); }
+  catch(error){if(isCurrent())throw error;return;}
+  if(!isCurrent())return;
   if(!["movie","episode"].includes(item.type))throw new Error("Choose a movie or episode.");
   const record={id:P.id(item.ratingKey),title:item.title,connection,options:{versionId:data.versionId,audioId:data.audioId,subtitleId:data.subtitleId}};
   cancelNext();
@@ -660,16 +664,25 @@ guarded("queue-series",async data=>{
   if(!selected)throw new Error("Connect to a server first.");
   const connection=selected,generation=queueRevision,preparation=++queuePreparation;
   const isCurrent=()=>selected===connection&&generation===queueRevision&&preparation===queuePreparation;
-  const parent=await metadataAt(connection,data.id);
+  let parent,episodes;
+  try {
+    parent=await metadataAt(connection,data.id);
+    if(!isCurrent())return;
+    if(!["show","season","episode"].includes(parent.type))throw new Error("Choose a show or season.");
+    const id=parent.type==="episode"?parent.grandparentRatingKey||parent.parentRatingKey:parent.ratingKey;
+    episodes=(await leaves(connection,id,isCurrent)).filter(item=>item.type==="episode");
+  } catch(error){if(isCurrent())throw error;return;}
   if(!isCurrent())return;
-  if(!["show","season","episode"].includes(parent.type))throw new Error("Choose a show or season.");
-  const id=parent.type==="episode"?parent.grandparentRatingKey||parent.parentRatingKey:parent.ratingKey;
-  let episodes=(await leaves(connection,id,isCurrent)).filter(item=>item.type==="episode");
   if(parent.type==="show"&&!settings().includeSpecials)episodes=episodes.filter(item=>Number(item.parentIndex)!==0);
   episodes.sort((a,b)=>Number(a.parentIndex||0)-Number(b.parentIndex||0)||Number(a.index||0)-Number(b.index||0));
-  if(parent.type==="episode"){const index=episodes.findIndex(item=>String(item.ratingKey)===String(parent.ratingKey));if(index>=0)episodes=episodes.slice(index);}
+  if(parent.type==="episode"){
+    const index=episodes.findIndex(item=>String(item.ratingKey)===String(parent.ratingKey));
+    if(index<0)throw new Error("This episode is no longer in the show. Refresh and try again.");
+    episodes=episodes.slice(index);
+  }
   if(!isCurrent())return;if(!episodes.length)throw new Error("No playable episodes found.");
-  resetQueue();queue=episodes.map(item=>({id:P.id(item.ratingKey),title:(item.grandparentTitle?item.grandparentTitle+" · ":"")+item.title,connection,options:{}}));
+  const prepared=episodes.map(item=>({id:P.id(item.ratingKey),title:(item.grandparentTitle?item.grandparentTitle+" · ":"")+item.title,connection,options:{}}));
+  resetQueue();queue=prepared;
   publishQueue();await advanceQueue(null);
 });
 guarded("player-control",async data=>{
