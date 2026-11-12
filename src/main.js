@@ -16,7 +16,8 @@ if(iina.global.getLabel()==="plex-playback"){
     iina.menu.removeAllItems();
     if((data.markers||[]).some(marker=>marker.type==="intro"))iina.menu.addItem(intro);
     if((data.markers||[]).some(marker=>marker.type==="credits"))iina.menu.addItem(credits);
-    tracker.open(data);
+    try { tracker.open(data); }
+    catch (_) { iina.global.postMessage("playback-error",{sessionID:data.sessionID}); }
   });
   onMessage("disable-sync",()=>tracker.disable());
   onMessage("activate-player",()=>{iina.core.window.miniaturized=false;});

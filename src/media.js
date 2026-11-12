@@ -1,5 +1,24 @@
 // Metadata selection stays in the plugin; only display fields cross the webview bridge.
 const P = require("./plex.js");
+function playbackTitle(item) {
+  const clean = value => String(value || "").replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim();
+  const title = clean(item.title);
+  if (item.type === "episode") {
+    const number = value => value != null && String(value).trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 0 ? String(Number(value)).padStart(2,"0") : "";
+    const season = number(item.parentIndex), episode = number(item.index);
+    const code = episode ? (season ? "S" + season : "") + "E" + episode : "";
+    return [clean(item.grandparentTitle),code,title].filter(Boolean).join(" — ") || "Plex episode";
+  }
+  const year = /^\d{4}$/.test(String(item.year)) ? " (" + item.year + ")" : "";
+  return (title || "Plex video") + year;
+}
+function playbackPlaylist(urls, title, startIndex) {
+  const label = String(title || "Plex video").replace(/[\u0000-\u001f\u007f]/g," ").replace(/\s+/g," ").trim();
+  return "#EXTM3U\n" + urls.slice(startIndex).map((url,index) => {
+    const part = urls.length > 1 ? " · Part " + (startIndex + index + 1) + " of " + urls.length : "";
+    return "#EXTINF:-1," + label + part + "\n" + url + "\n";
+  }).join("");
+}
 function versions(item) {
   return (item.Media || []).map((media, index) => ({ id: String(media.id == null ? index : media.id), index,
     title: [item.editionTitle, media.videoResolution ? String(media.videoResolution).toLowerCase()==="4k"?"4K":media.videoResolution+"p" : "", media.videoCodec, media.audioCodec, media.bitrate ? Math.round(media.bitrate / 1000) + " Mbps" : ""].filter(Boolean).join(" · ") || "Original file " + (index + 1),
@@ -53,4 +72,4 @@ function xmlAttributes(text, name) {
   }
   return result;
 }
-module.exports = { versions, chooseVersion, streams, selectTracks, markers, xmlAttributes };
+module.exports = { playbackTitle, playbackPlaylist, versions, chooseVersion, streams, selectTracks, markers, xmlAttributes };
