@@ -476,7 +476,7 @@ class PlexBrowser extends PlexElement {
       this.section="library";this.view("breadcrumbs").replaceChildren(this.crumb(event.detail.item));
       this.view("search").value="";this.resetFilters();this.view("genre-filter").disabled=true;this.view("year-filter").disabled=true;this.post("filters",{library:event.detail.item.ratingKey});this.browse(0);
     });
-    this.listen(this,"path-change",()=>{this.restorePath();this.browse(this.view("breadcrumbs").lastElementChild.pageStart);});
+    this.listen(this,"path-change",()=>{this.restorePath();this.browse(this.view("breadcrumbs").lastElementChild.pageStart,true);});
     this.listen(this,"media-browse",event=>{this.savePath();this.view("breadcrumbs").append(this.crumb(event.detail.item));this.browse(0);});
     this.listen(this,"media-play",event=>this.play(event.detail.item,event.detail));
     this.listen(this,"media-details",event=>{const details=this.view("details");details.copyFrom(event.detail.item);details.open=true;this.loadDetails();});
@@ -531,9 +531,10 @@ class PlexBrowser extends PlexElement {
   restorePath(){const crumb=this.view("breadcrumbs").lastElementChild;if(!crumb)return;this.view("search").value=crumb.searchText;this.view("sort").value=crumb.sortValue;this.view("watch-filter").value=crumb.watchValue;this.view("genre-filter").value=crumb.genreValue;this.view("year-filter").value=crumb.yearValue;}
   back(){const path=this.view("breadcrumbs");if(path.childElementCount>1)path.lastElementChild.previousElementSibling.part("button").click();}
   openView(section){this.savePath();this.section=section;const titles={continue:"Continue Watching",next:"Up Next",recent:"Recently Added",search:"Search results",collections:"Collections",playlists:"Playlists"};this.view("breadcrumbs").replaceChildren(document.createElement("plex-crumb").setProperties({mediaTitle:titles[section]||"Library"}));this.browse(0);}
-  refreshView(){const crumb=this.view("breadcrumbs").lastElementChild;if(!crumb||this.busy)return;this.savePath();this.browse(crumb.pageStart);}
-  browse(start){
+  refreshView(){const crumb=this.view("breadcrumbs").lastElementChild;if(!crumb||this.busy)return;this.savePath();this.browse(crumb.pageStart,true);}
+  browse(start,restoreScroll=false){
     const path=this.view("breadcrumbs"),current=path.lastElementChild;if(!current)return;
+    if(!restoreScroll)current.scrollPosition=0;
     this.request++;this.clearListing();this.status("Loading…");this.view("welcome").hidden=true;this.view("title").textContent=current.mediaTitle;
     const top=path.childElementCount===1;this.view("search-form").hidden=!top;this.view("filters").hidden=!(top&&this.section==="library");this.view("sort").disabled=!top||this.section!=="library";
     this.view("back").disabled=top;this.view("play-season").hidden=top||!["show","season"].includes(current.mediaType);this.view("play-season").textContent=current.mediaType==="show"?"Play show":"Play season";
